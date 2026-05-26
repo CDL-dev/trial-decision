@@ -52,7 +52,8 @@ def bootstrap_db(db_path: Path) -> None:
                 player_id INTEGER NOT NULL,
                 submitted_at TEXT,
                 is_final INTEGER NOT NULL,
-                payload_json TEXT NOT NULL
+                payload_json TEXT NOT NULL,
+                UNIQUE(match_id, round_index, player_id)
             );
             CREATE TABLE IF NOT EXISTS round_overrides (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,7 +62,8 @@ def bootstrap_db(db_path: Path) -> None:
                 player_id INTEGER NOT NULL,
                 override_json TEXT NOT NULL,
                 bonus_penalty REAL NOT NULL,
-                updated_at TEXT
+                updated_at TEXT,
+                UNIQUE(match_id, round_index, player_id)
             );
             CREATE TABLE IF NOT EXISTS round_results (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
