@@ -1,0 +1,1 @@
+"""Settlement engine adapter package."""
