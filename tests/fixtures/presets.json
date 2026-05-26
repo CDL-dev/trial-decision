@@ -1,0 +1,8 @@
+{
+  "default": {
+    "name": "Default Preset",
+    "player_count": 3,
+    "round_count": 5,
+    "cities": ["Shanghai", "Beijing"]
+  }
+}

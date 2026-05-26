@@ -1,0 +1,10 @@
+{
+  "Shanghai": {
+    "loan_limit": 5000000,
+    "interest_rate": 0.05,
+    "engineer_salary_default": 30000,
+    "material_cost": 800,
+    "market_size": 200000,
+    "avg_price": 7000
+  }
+}
