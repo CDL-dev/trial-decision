@@ -34,3 +34,79 @@ def test_trial_schema_forces_disabled_inputs_to_zero():
     assert normalized["research_investment"] == 0
     assert normalized["engineers"] == 2
     assert normalized["Shanghai_agents"] == 1
+    assert normalized["Shanghai_market_report"] == 1
+
+
+def test_normalize_trial_submission_empty_payload():
+    normalized = normalize_trial_submission({})
+    assert normalized["bank_amount"] == 0
+    assert normalized["engineers"] == 0
+    assert normalized["engineer_salary"] == 0
+    assert normalized["quality_investment"] == 0
+    assert normalized["volume"] == 0
+    assert normalized["workers"] == 0
+
+
+def test_normalize_trial_submission_market_report_false():
+    payload = {
+        "city_sales": {
+            "Beijing": {
+                "agents": 1,
+                "marketing": 10000,
+                "price": 5000,
+                "market_report": False,
+            }
+        }
+    }
+    normalized = normalize_trial_submission(payload)
+    assert normalized["Beijing_market_report"] == 0
+
+
+def test_normalize_trial_submission_market_report_missing():
+    payload = {
+        "city_sales": {
+            "Beijing": {
+                "agents": 1,
+                "marketing": 10000,
+                "price": 5000,
+            }
+        }
+    }
+    normalized = normalize_trial_submission(payload)
+    assert normalized["Beijing_market_report"] == 0
+
+
+def test_normalize_trial_submission_multiple_cities():
+    payload = {
+        "city_sales": {
+            "Shanghai": {
+                "agents": 2,
+                "marketing": 80000,
+                "price": 9000,
+                "market_report": True,
+            },
+            "Beijing": {
+                "agents": 1,
+                "marketing": 50000,
+                "price": 7000,
+                "market_report": False,
+            },
+        }
+    }
+    normalized = normalize_trial_submission(payload)
+    assert normalized["Shanghai_agents"] == 2
+    assert normalized["Shanghai_market_report"] == 1
+    assert normalized["Beijing_agents"] == 1
+    assert normalized["Beijing_market_report"] == 0
+
+
+def test_normalize_trial_submission_none_values():
+    payload = {
+        "loan": None,
+        "engineers_change": None,
+        "volume": None,
+    }
+    normalized = normalize_trial_submission(payload)
+    assert normalized["bank_amount"] == 0
+    assert normalized["engineers"] == 0
+    assert normalized["volume"] == 0
