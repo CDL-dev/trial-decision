@@ -1,4 +1,4 @@
-"""Player report page — detailed round results for debugging settlement."""
+"""Player report page — structured like sim_clone reports.html."""
 
 from __future__ import annotations
 
@@ -43,108 +43,82 @@ def render(db_path: Path):
 
     st.subheader(f"{player['company_name']} — Round {report_round} Report")
 
-    # Key Metrics
+    # ═══ Key Metrics ═══
     st.divider()
     st.subheader("Key Metrics")
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.metric("Total Assets", fmt_money(summary.get("total_assets", 0)))
+        st.metric("Total Assets", fmt_money(summary["total_assets"]))
     with c2:
-        st.metric("Debt", fmt_money(summary.get("debt", 0)))
+        st.metric("Debt", fmt_money(summary["debt"]))
     with c3:
-        st.metric("Net Assets", fmt_money(summary.get("net_assets", 0)))
+        st.metric("Net Assets", fmt_money(summary["net_assets"]))
     with c4:
-        st.metric("Operating Profit", fmt_money(summary.get("operating_profit", 0)))
-    c1, c2, c3 = st.columns(3)
+        st.metric("Operating Profit", fmt_money(summary["operating_profit"]))
+    c1, c2 = st.columns(2)
     with c1:
-        st.metric("Revenue", fmt_money(summary.get("total_revenue", 0)))
+        st.metric("Revenue", fmt_money(summary["total_revenue"]))
     with c2:
-        st.metric("Total Cost", fmt_money(summary.get("total_cost", 0)))
+        st.metric("Total Cost", fmt_money(summary["total_cost"]))
 
-    # Finance — Cashflow
+    # ═══ Finance — Cashflow ═══
     st.divider()
-    st.subheader("Finance — Cashflow")
+    st.subheader("Finance")
     cf = report.get("cashflow_table", [])
     if cf:
         cf_data = [{"Step": r[0], "Change": r[2] if len(r) > 2 else "", "Balance": r[3] if len(r) > 3 else ""} for r in cf]
         st.dataframe(cf_data, width="stretch", hide_index=True)
 
-    # HR
+    # ═══ Human Resources ═══
     st.divider()
-    st.subheader("Human Resources — Engineers")
-    c1, c2, c3, c4, c5 = st.columns(5)
-    with c1:
-        st.metric("Previous", report.get("eng_effective", 0) - report.get("eng_hired", 0) + report.get("eng_fired", 0))
-    with c2:
-        st.metric("Hired", report.get("eng_hired", 0))
-    with c3:
-        st.metric("Fired", report.get("eng_fired", 0))
-    with c4:
-        st.metric("Current", report.get("eng_effective", 0))
-    with c5:
-        st.metric("Salary/mo", fmt_money(report.get("eng_salary", 0)))
-    st.caption(f"Salary Paid: {fmt_money(report.get('salary_paid', 0))}")
+    st.subheader("Human Resources")
+    prev = report.get("eng_effective", 0) - report.get("eng_hired", 0) + report.get("eng_fired", 0)
+    hr_data = [
+        {"": "Previous", "Engineers": prev},
+        {"": "Hired", "Engineers": report.get("eng_hired", 0)},
+        {"": "Fired", "Engineers": report.get("eng_fired", 0)},
+        {"": "Working", "Engineers": report.get("eng_effective", 0)},
+    ]
+    st.dataframe(hr_data, width="stretch", hide_index=True)
+    st.caption(f"Salary/mo: {fmt_money(report.get('eng_salary', 0))}    |    Salary Paid: {fmt_money(report.get('salary_paid', 0))}")
 
-    # Production
+    # ═══ Production ═══
     st.divider()
     st.subheader("Production")
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        st.metric("Volume Planned", report.get("volume_planned", 0))
-    with c2:
-        st.metric("Quality Paid", fmt_money(report.get("quality_paid", 0)))
-    with c3:
-        st.metric("Effective Input", report.get("effective_volume_input", 0))
-    with c4:
-        st.metric("Capacity Limit", report.get("capacity_limit", 0))
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        st.metric("Quality Bonus", str(report.get("quality_bonus", 1.0)))
-    with c2:
-        st.metric("Volume Final", report.get("volume_final", 0))
-    with c3:
-        st.metric("PQI", f"{report.get('pqi', 0):,.2f}")
-    with c4:
-        st.caption(f"Material Paid: {fmt_money(report.get('material_paid', 0))}")
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        st.metric("Inventory Before", report.get("products_inventory_before", 0))
-    with c2:
-        st.metric("Produced", report.get("products_produced", 0))
-    with c3:
-        st.metric("Available", report.get("available", 0))
-    with c4:
-        st.metric("Sold", report.get("products_sold", 0))
-    c1, c2 = st.columns(2)
-    with c1:
-        st.metric("Unsold", report.get("products_inventory_after", 0))
-    with c2:
-        st.caption(f"Storage Paid: {fmt_money(report.get('storage_paid', 0))}")
+    prod_data = [
+        {"": "Volume Planned", "Units": report.get("volume_planned", 0)},
+        {"": "Produced", "Units": report.get("products_produced", 0)},
+        {"": "Sold", "Units": report.get("products_sold", 0)},
+        {"": "Inventory Before", "Units": report.get("products_inventory_before", 0)},
+        {"": "Inventory After", "Units": report.get("products_inventory_after", 0)},
+    ]
+    st.dataframe(prod_data, width="stretch", hide_index=True)
+    pqi = report.get("pqi", 0)
+    st.caption(
+        f"PQI: {pqi:,.2f}    |    "
+        f"Material Paid: {fmt_money(report.get('material_paid', 0))}    |    "
+        f"Storage Paid: {fmt_money(report.get('storage_paid', 0))}"
+    )
 
-    # Sales — Per City (v4m-lite)
+    # ═══ Sales — Per City ═══
     st.divider()
-    st.subheader("Sales — Per City (v4m-lite)")
+    st.subheader("Sales")
     sales_detail = report.get("sales_detail_by_city", {})
+    sales_rows = []
     for city_name, sd in sales_detail.items():
-        with st.expander(f"{city_name} — Sold {sd.get('sold', 0)} units, Revenue {fmt_money(sd.get('revenue', 0))}"):
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.caption(f"Market Size: {sd.get('market_size', 0):,.0f}")
-                st.caption(f"Agents: {sd.get('agents_prev', 0)} → {sd.get('agents_now', 0)}")
-                st.caption(f"Agent Cost: {fmt_money(sd.get('agent_cost', 0))}")
-            with c2:
-                st.caption(f"Price: {fmt_money(sd.get('price', 0))}")
-                st.caption(f"Mkt Planned: {fmt_money(sd.get('marketing_planned', 0))}")
-                st.caption(f"Mkt Paid: {fmt_money(sd.get('marketing_paid', 0))}")
-            with c3:
-                st.caption(f"Share: {fmt_pct(sd.get('market_share', 0))}")
+        sales_rows.append({
+            "City": city_name,
+            "Agents": sd.get("agents_now", 0),
+            "Mkt Paid": fmt_money(sd.get("marketing_paid", 0)),
+            "Price": fmt_money(sd.get("price", 0)),
+            "Sold": sd.get("sold", 0),
+            "Revenue": fmt_money(sd.get("revenue", 0)),
+            "Share": fmt_pct(sd.get("market_share", 0)),
+        })
+    if sales_rows:
+        st.dataframe(sales_rows, width="stretch", hide_index=True)
 
-    # Config Snapshot
-    st.divider()
-    with st.expander("Config Snapshot (debug)", expanded=False):
-        st.json(report.get("config_snapshot", {}))
-
-    # Navigation
+    # ═══ Navigation ═══
     st.divider()
     if match["status"] == "ended":
         if st.button("View Final Results"):
