@@ -340,8 +340,8 @@ def settle(*, fv: dict, config: dict, state: dict, round_index: int,
     # Single-player: proportional allocation among active cities
     active = [(cn, sp) for cn, sp in p1["sales_prep"].items() if sp["agents_now"] > 0]
     uptake_cap = float(config.get("v4m_uptake_max", 0.95))
-    steep = float(config.get("v4m_uptake_steepness", 2.0))
-    mid = float(config.get("v4m_uptake_midpoint", 1.0))
+    steep = float(config.get("v4m_uptake_steepness", 8.0))
+    mid = float(config.get("v4m_uptake_midpoint", 1.5))
     # Compute per-city demand
     city_demands = {}
     total_demand = 0.0

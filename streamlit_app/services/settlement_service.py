@@ -78,7 +78,7 @@ def settle_current_round(db_path: Path, match_id: int) -> None:
 
         # Per-team demand from individual base_cpi, then relative-share allocation
         uptake_cap = float(config.get("v4m_uptake_max", 0.95))
-        steep = float(config.get("v4m_uptake_steepness", 4.0))
+        steep = float(config.get("v4m_uptake_steepness", 8.0))
         mid = float(config.get("v4m_uptake_midpoint", 1.5))
         # Each active team generates its own demand estimate
         team_demands: dict[int, float] = {}
@@ -124,16 +124,10 @@ def settle_current_round(db_path: Path, match_id: int) -> None:
         for t in active:
             pid = t["player_id"]
             alloc = allocated.get(pid, 0)
-            available = t.get("available_products", 0) - t.get("total_sold_allocated", 0)
-            alloc = min(alloc, available)
-            alloc = max(0, alloc)
-            alloc = min(alloc, available)
-            alloc = max(0, alloc)
-            allocated[pid] = alloc
-            remaining_demand -= alloc
             t["total_sold_allocated"] = t.get("total_sold_allocated", 0) + alloc
             t.setdefault("sold_by_city", {})[city_name] = alloc
             t.setdefault("revenue_by_city", {})[city_name] = alloc * t.get("price_by_city", {}).get(city_name, 0)
+            cpi_i = t.get("base_cpi_by_city", {}).get(city_name, 0)
             t.setdefault("cpi_by_city", {})[city_name] = round(cpi_i, 4)
 
     # ═══ Phase 3: per-player finalize ════════════════════════════════
