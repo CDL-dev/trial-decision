@@ -1,32 +1,66 @@
-"""Trial settlement engine — only enabled mechanisms (loan, engineers,
-quality, volume, city sales). No workers, management, patent, or tax."""
+"""Trial settlement engine — cash-sensitive flow + v4m-lite sales model.
+
+Key principles:
+1. Every cost is constrained by available cash; effective inputs are derived
+   from what was actually paid, not what was planned.
+2. Sales use v4m-lite: base_cpi → uptake → demand → share → supply cap.
+3. Revenue flows back into cash before storage/interest.
+"""
 
 from __future__ import annotations
 
 import math
 
 
-def _agents_base_sales(agents: int, market_size: float) -> float:
-    """Base sales driven by agents and market size."""
-    if agents <= 0:
-        return 0.0
-    # Each agent covers ~0.5% of the addressable market, with diminishing returns
-    coverage = min(1.0, agents * 0.005)
-    return market_size * coverage * (1.0 + 0.3 * math.log(1 + agents))
+# ═══════════════════════════════════════════════════════════════════════
+# v4m-lite helpers
+# ═══════════════════════════════════════════════════════════════════════
+
+def _base_cpi(
+    quality_investment: float,
+    marketing: float,
+    price: float,
+    avg_price: float,
+    pqi: float,
+    market_size: float,
+    config: dict,
+) -> float:
+    """v4m-lite base_cpi per city per player.
+
+    Combines quality (PQI), marketing intensity (MI), and sales price index (SPI)
+    into a single competitiveness score.
+    """
+    k_pqi = float(config.get("cpi_k_pqi", 0.4))
+    k_mi = float(config.get("cpi_k_mi", 0.3))
+    k_spi = float(config.get("cpi_k_spi", 0.3))
+
+    # PQI contribution: normalized quality index
+    pqi_norm = math.log(1 + max(pqi, 0) / max(avg_price, 0.01))
+
+    # MI contribution: marketing spend relative to market size
+    mi_norm = math.log(1 + marketing / max(market_size, 1))
+
+    # SPI contribution: inverse of price markup over avg
+    if price > 0 and avg_price > 0:
+        spi_norm = math.log(1 + avg_price / price)
+    else:
+        spi_norm = 0.0
+
+    return k_pqi * pqi_norm + k_mi * mi_norm + k_spi * spi_norm
 
 
-def _marketing_multiplier(marketing: float, base_market_size: float) -> float:
-    if marketing <= 0 or base_market_size <= 0:
-        return 1.0
-    ratio = marketing / base_market_size
-    return 1.0 + 0.5 * math.log(1 + ratio)
+def _uptake(base_cpi: float, config: dict) -> float:
+    """v4m-lite uptake: sigmoid that saturates at high CPI."""
+    uptake_max = float(config.get("v4m_uptake_max", 0.95))
+    uptake_steepness = float(config.get("v4m_uptake_steepness", 2.0))
+    # Sigmoid: uptake_max / (1 + exp(-steepness * (cpi - midpoint)))
+    midpoint = float(config.get("v4m_uptake_midpoint", 1.0))
+    return uptake_max / (1.0 + math.exp(-uptake_steepness * (base_cpi - midpoint)))
 
 
-def _price_effect(price: float, avg_price: float) -> float:
-    if avg_price <= 0 or price <= 0:
-        return 1.0
-    ratio = avg_price / max(price, 0.01)
-    return ratio ** 1.5
+def _demand_total(market_size: float, uptake: float) -> float:
+    """Total demand in units for a city."""
+    return market_size * uptake
 
 
 def _quality_yield_bonus(quality_investment: float) -> float:
@@ -42,240 +76,321 @@ def _compute_pqi(quality_investment: float, old_products: int, new_products: int
     return quality_investment / denominator
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# Main settlement
+# ═══════════════════════════════════════════════════════════════════════
+
 def settle(
     *,
     fv: dict,
     config: dict,
     state: dict,
     round_index: int,
-    total_rounds: int,
+    total_rounds: int = 4,
     player_home_city: str = "",
 ) -> dict:
     # ── Config ───────────────────────────────────────────────────────
     interest_rate = float(config.get("bank_interest_rate", 0.0))
-    material_cost_per_unit = float(config.get("product_material_price", 800.0))
-    storage_cost_per_unit = float(config.get("product_storage_price", 50.0))
-    training_per_engineer = float(config.get("training_cost_per_engineer", 0.0))
-    agent_hire_price = float(config.get("agent_hire_price", 300_000))
-    agent_fire_price = float(config.get("agent_fire_price", 100_000))
+    material_per_unit = float(config.get("product_material_price", 800.0))
+    storage_per_unit = float(config.get("product_storage_price", 50.0))
+    training_per_eng = float(config.get("training_cost_per_engineer", 0.0))
+    agent_hire = float(config.get("agent_hire_price", 300_000))
+    agent_fire = float(config.get("agent_fire_price", 100_000))
     pqi_weight = float(config.get("pqi_old_product_weight", 1.1))
     eng_per_prod = float(config.get("engineer_per_product", 6.0))
     eng_hours_per_prod = float(config.get("engineer_hours_per_product", 9.0))
+    hours_per_month = float(config.get("hours_per_month", 504.0))
+    months_per_round = float(config.get("months_per_round", 3.0))
+    salary_min = float(config.get("engineer_salary_min", 1000))
+    salary_max = float(config.get("engineer_salary_max", 10000))
 
     cities_config = config.get("cities_config") or []
     city_cfgs = {c["name"]: c for c in cities_config if c.get("name")}
 
     # ── State ────────────────────────────────────────────────────────
-    cash_start = float(state.get("cash", 0.0))
-    cash = cash_start
+    cash = float(state.get("cash", 0.0))
+    cash_start = cash
     debt = float(state.get("debt", 0.0))
-    current_engineers = int(state.get("engineers", 0))
+    current_eng = int(state.get("engineers", 0))
     products_inventory = int(state.get("products_inventory", 0))
     agents_by_city = dict(state.get("agents_by_city", {}))
 
     # ── Parse submission ─────────────────────────────────────────────
     bank_amount = float(fv.get("bank_amount", 0) or 0)
-    engineers_delta = int(fv.get("engineers", 0) or 0)
-    raw_engineer_salary = float(fv.get("engineer_salary", 0) or 0)
-    quality_investment = float(fv.get("quality_investment", 0) or 0)
-    volume_planned = int(fv.get("volume", 0) or 0)
+    eng_delta = int(fv.get("engineers", 0) or 0)
+    raw_salary = float(fv.get("engineer_salary", 0) or 0)
+    planned_quality = float(fv.get("quality_investment", 0) or 0)
+    planned_volume = int(fv.get("volume", 0) or 0)
 
-    # Clamp engineer salary to preset min/max, with carry-forward from previous state
-    salary_min = float(config.get("engineer_salary_min", 1000))
-    salary_max = float(config.get("engineer_salary_max", 10000))
-    engineer_salary = max(salary_min, min(salary_max, raw_engineer_salary))
-    # If submitted salary is 0/null but player has existing engineers, carry forward their salary
-    if raw_engineer_salary <= 0 and current_engineers > 0:
-        prev_salary = float(state.get("engineer_salary", 0))
-        if prev_salary >= salary_min:
-            engineer_salary = prev_salary
+    # Engineer salary: clamp + carry-forward
+    eng_salary = max(salary_min, min(salary_max, raw_salary))
+    if raw_salary <= 0 and current_eng > 0:
+        prev = float(state.get("engineer_salary", 0))
+        if prev >= salary_min:
+            eng_salary = prev
 
-    cashflow_rows: list[list] = []
-    cashflow_rows.append(["Starting Capital", "", "", fmt_m(cash_start)])
+    cashflow: list[list] = []
+    cashflow.append(["Starting Capital", "", "", fmt(cash_start)])
 
-    # ── 1. Loan ──────────────────────────────────────────────────────
+    # ═══════════════════════════════════════════════════════════════
+    # 1. Loan
+    # ═══════════════════════════════════════════════════════════════
     if bank_amount > 0:
         cash += bank_amount
         debt += bank_amount
-        cashflow_rows.append(["Loan (borrow)", "", fmt_m(bank_amount), fmt_m(cash)])
+        cashflow.append(["Loan (borrow)", "", fmt(bank_amount), fmt(cash)])
     elif bank_amount < 0:
-        repayment = min(-bank_amount, cash)
-        cash -= repayment
-        debt = max(0.0, debt - repayment)
-        cashflow_rows.append(["Loan (repay)", "", fmt_m(-repayment), fmt_m(cash)])
+        repay = min(-bank_amount, cash)
+        cash -= repay
+        debt = max(0.0, debt - repay)
+        cashflow.append(["Loan (repay)", "", fmt(-repay), fmt(cash)])
     else:
-        cashflow_rows.append(["Loan", "", "0", fmt_m(cash)])
+        cashflow.append(["Loan", "", "0", fmt(cash)])
 
-    # ── 2. Engineers ─────────────────────────────────────────────────
-    engineers_hired = max(0, engineers_delta)
-    engineers_fired = max(0, -engineers_delta)
-    new_engineers = current_engineers + engineers_delta
-    if new_engineers < 0:
-        engineers_fired = current_engineers
-        engineers_hired = 0
-        new_engineers = 0
+    # ═══════════════════════════════════════════════════════════════
+    # 2. Engineer salary — cash-sensitive
+    # ═══════════════════════════════════════════════════════════════
+    eng_target = max(0, current_eng + eng_delta)
+    salary_needed = eng_target * eng_salary * months_per_round
+    salary_paid = min(salary_needed, cash)
+    cash -= salary_paid
 
-    training_cost = engineers_hired * training_per_engineer
-    months_per_round = float(config.get("months_per_round", 3.0))
-    total_engineer_salary = new_engineers * engineer_salary * months_per_round
-    total_hr_cost = total_engineer_salary + training_cost
-    actual_hr_cost = min(total_hr_cost, cash)
-    cash -= actual_hr_cost
-    detail_parts = [f"{new_engineers} eng × ¥{engineer_salary:,.0f}/mo × {months_per_round:.0f}mo"]
-    if training_cost > 0:
-        detail_parts.append(f"training {engineers_hired} hired ¥{training_cost:,.0f}")
-    cashflow_rows.append(["Engineer Cost", " + ".join(detail_parts), fmt_m(-total_hr_cost), fmt_m(cash)])
+    # Effective engineers: only those whose salary was fully paid
+    cost_per_eng = eng_salary * months_per_round
+    if cost_per_eng > 0:
+        effective_eng = int(salary_paid // cost_per_eng)
+    else:
+        effective_eng = eng_target
+    effective_eng = min(effective_eng, eng_target)
+    eng_fired = current_eng - effective_eng if effective_eng < current_eng else 0
+    eng_hired = effective_eng - current_eng if effective_eng > current_eng else 0
+    if eng_fired < 0:
+        eng_fired = 0
 
-    # ── 3. Production ────────────────────────────────────────────────
-    # Engineer capacity: complete groups only, hours_per_month (not × months)
-    hours_per_month = float(config.get("hours_per_month", 504.0))
-    products_per_group_base = hours_per_month / max(eng_hours_per_prod, 0.01)
-    engineer_groups = new_engineers // max(int(eng_per_prod), 1)
-    capacity_limit = int(engineer_groups * products_per_group_base)
-    total_engineer_hours = new_engineers * hours_per_month
+    cashflow.append([
+        "Engineer Salary",
+        f"{effective_eng} eng × ¥{eng_salary:,.0f}/mo × {months_per_round:.0f}mo (planned {eng_target})",
+        fmt(-salary_paid), fmt(cash),
+    ])
 
-    quality_bonus = _quality_yield_bonus(quality_investment)
-    volume_effective = int(volume_planned * quality_bonus)
-    # Cap production by engineer capacity
-    volume_capped = min(volume_effective, capacity_limit)
-    products_produced = volume_capped
-    available_products = products_inventory + products_produced
+    # ═══════════════════════════════════════════════════════════════
+    # 3. Training cost — cash-sensitive
+    # ═══════════════════════════════════════════════════════════════
+    if eng_hired > 0 and training_per_eng > 0:
+        training_needed = eng_hired * training_per_eng
+        training_paid = min(training_needed, cash)
+        cash -= training_paid
+        effective_hires = int(training_paid // training_per_eng) if training_per_eng > 0 else 0
+        # Reduce effective engineers if training couldn't be paid
+        if effective_hires < eng_hired:
+            shortfall = eng_hired - effective_hires
+            effective_eng -= shortfall
+            eng_hired = effective_hires
+            eng_fired += shortfall
+        cashflow.append([
+            "Training",
+            f"{effective_hires} hired × ¥{training_per_eng:,.0f}",
+            fmt(-training_paid), fmt(cash),
+        ])
+    else:
+        training_paid = 0.0
 
-    # Material cost based on planned volume (you pay for what you plan, not what you get)
-    material_cost_total = volume_planned * material_cost_per_unit
-    actual_material_cost = min(material_cost_total, cash)
-    cash -= actual_material_cost
+    total_hr_paid = salary_paid + training_paid
 
-    cashflow_rows.append(["Material Cost", f"{volume_planned} units × ¥{material_cost_per_unit:,.0f}", fmt_m(-actual_material_cost), fmt_m(cash)])
+    # ═══════════════════════════════════════════════════════════════
+    # 4. Material & Production — cash-sensitive
+    # ═══════════════════════════════════════════════════════════════
+    # Capacity from effective engineers
+    eng_groups = int(effective_eng // max(int(eng_per_prod), 1))
+    products_per_group = int(hours_per_month / max(eng_hours_per_prod, 0.01))
+    capacity_limit = int(eng_groups * products_per_group)
 
-    # PQI
+    # Quality investment: cash-sensitive
+    quality_paid = min(planned_quality, cash)
+    cash -= quality_paid
+
+    # Material: pay for planned volume, capped by cash
+    material_needed = planned_volume * material_per_unit
+    material_paid = min(material_needed, cash)
+    cash -= material_paid
+
+    # Effective volume from what was actually paid for
+    if material_per_unit > 0:
+        effective_volume_input = int(material_paid // material_per_unit)
+    else:
+        effective_volume_input = planned_volume
+
+    # Production from effective material + quality bonus
+    quality_bonus = _quality_yield_bonus(quality_paid)
+    volume_gross = int(effective_volume_input * quality_bonus)
+    volume_final = min(volume_gross, capacity_limit)
+    products_produced = volume_final
+    available = products_inventory + products_produced
+
+    cashflow.append([
+        "Material Cost",
+        f"{effective_volume_input} units × ¥{material_per_unit:,.0f} (planned {planned_volume})",
+        fmt(-material_paid), fmt(cash),
+    ])
+
+    # PQI (based on effective quality)
     old_products = products_inventory
-    pqi = _compute_pqi(quality_investment, old_products, products_produced, pqi_weight)
+    pqi = _compute_pqi(quality_paid, old_products, products_produced, pqi_weight)
 
-    # ── 4. City sales ────────────────────────────────────────────────
-    sold_by_city: dict[str, int] = {}
-    revenue_by_city: dict[str, float] = {}
-    market_share_by_city: dict[str, float] = {}
-    cpi_by_city: dict[str, float] = {}
+    # ═══════════════════════════════════════════════════════════════
+    # 5. City sales (v4m-lite)
+    # ═══════════════════════════════════════════════════════════════
     sales_detail: dict[str, dict] = {}
     total_revenue = 0.0
-    total_marketing = 0.0
-    total_agent_cost = 0.0
     total_sold = 0
-    actual_marketing_paid = 0.0
-    actual_agent_cost_paid = 0.0
+    actual_mkt_paid = 0.0
+    actual_agt_paid = 0.0
 
+    sold_by_city: dict[str, int] = {}
+    revenue_by_city: dict[str, float] = {}
+    share_by_city: dict[str, float] = {}
+    cpi_by_city: dict[str, float] = {}
+    uptake_by_city: dict[str, float] = {}
+    demand_by_city: dict[str, float] = {}
+
+    # Pass 1: compute per-city demand (v4m)
     for city_name, city_cfg in city_cfgs.items():
-        agents_delta = int(fv.get(f"{city_name}_agents", 0) or 0)
-        marketing = float(fv.get(f"{city_name}_marketing", 0) or 0)
-        raw_price = float(fv.get(f"{city_name}_price", 0) or 0)
-        price = raw_price if raw_price > 0 else float(city_cfg.get("avg_price", 5000.0))
-        market_report = int(fv.get(f"{city_name}_market_report", 0) or 0)
-
-        prev_agents = int(agents_by_city.get(city_name, 0))
-        new_agents = max(0, prev_agents + agents_delta)
-        agents_by_city[city_name] = new_agents
-
-        agent_cost = 0.0
-        if agents_delta > 0:
-            agent_cost = agents_delta * agent_hire_price
-        elif agents_delta < 0:
-            agent_cost = abs(agents_delta) * agent_fire_price
-        total_agent_cost += agent_cost
-
-        # Deduct marketing and agent costs — never go below 0
-        mkt_paid = min(marketing, cash)
-        cash -= mkt_paid
-        actual_marketing_paid += mkt_paid
-        agt_paid = min(agent_cost, cash)
-        cash -= agt_paid
-        actual_agent_cost_paid += agt_paid
-
         population = float(city_cfg.get("population", 0))
         penetration = float(city_cfg.get("initial_penetration", 0.02))
         market_size = population * penetration
         avg_price = float(city_cfg.get("avg_price", 5000.0))
 
-        base_sales = _agents_base_sales(new_agents, market_size)
-        mkt_mult = _marketing_multiplier(marketing, market_size)
-        price_mult = _price_effect(price, avg_price)
-        city_demand = base_sales * mkt_mult * price_mult
-        sold = int(min(city_demand, available_products - total_sold))
-        sold = max(0, sold)
-        sold_by_city[city_name] = sold
-        total_sold += sold
-        revenue = sold * price
-        revenue_by_city[city_name] = revenue
-        total_revenue += revenue
-        total_marketing += marketing
-        market_share_by_city[city_name] = sold / max(market_size, 1)
+        # Get planned inputs
+        marketing_planned = float(fv.get(f"{city_name}_marketing", 0) or 0)
+        raw_price = float(fv.get(f"{city_name}_price", 0) or 0)
+        price = raw_price if raw_price > 0 else avg_price
+        agents_delta = int(fv.get(f"{city_name}_agents", 0) or 0)
 
-        # Simplified v4m CPI per city
-        cpi_k_pqi = float(config.get("cpi_k_pqi", 0.4))
-        cpi_k_mi = float(config.get("cpi_k_mi", 0.3))
-        cpi_k_spi = float(config.get("cpi_k_spi", 0.3))
-        pqi_norm = min(pqi / max(avg_price, 1), 2.0) if pqi > 0 else 1.0
-        mi_norm = mkt_mult
-        spi_norm = price_mult
-        cpi = cpi_k_pqi * pqi_norm + cpi_k_mi * mi_norm + cpi_k_spi * spi_norm
-        cpi_by_city[city_name] = round(cpi, 4)
+        # Agent cost
+        agt_cost = 0.0
+        if agents_delta > 0:
+            agt_cost = agents_delta * agent_hire
+        elif agents_delta < 0:
+            agt_cost = abs(agents_delta) * agent_fire
+
+        # Cash-sensitive: pay agents first, then marketing
+        agt_paid = min(agt_cost, cash)
+        cash -= agt_paid
+        actual_agt_paid += agt_paid
+
+        # Effective agents: only if agent cost was paid
+        if agents_delta > 0 and agent_hire > 0:
+            effective_delta = int(agt_paid // agent_hire)
+        elif agents_delta < 0:
+            effective_delta = agents_delta  # firing always works
+        else:
+            effective_delta = 0
+        prev_agents = int(agents_by_city.get(city_name, 0))
+        new_agents = max(0, prev_agents + effective_delta)
+
+        # Effective marketing: cash-sensitive
+        mkt_paid = min(marketing_planned, cash)
+        cash -= mkt_paid
+        actual_mkt_paid += mkt_paid
+
+        # v4m-lite CPI and demand
+        bc = _base_cpi(quality_paid, mkt_paid, price, avg_price, pqi, market_size, config)
+        up = _uptake(bc, config)
+        demand = _demand_total(market_size, up)
+
+        agents_by_city[city_name] = new_agents
+        cpi_by_city[city_name] = round(bc, 4)
+        uptake_by_city[city_name] = round(up, 4)
+        demand_by_city[city_name] = round(demand, 1)
 
         sales_detail[city_name] = {
             "agents_prev": prev_agents,
-            "agents_delta": agents_delta,
+            "agents_delta": effective_delta,
             "agents_now": new_agents,
-            "agent_cost": agent_cost,
-            "marketing": marketing,
+            "agent_cost": agt_paid,
+            "marketing_planned": marketing_planned,
+            "marketing_paid": mkt_paid,
             "price": price,
             "avg_price": avg_price,
-            "base_sales": round(base_sales, 1),
-            "mkt_mult": round(mkt_mult, 4),
-            "price_mult": round(price_mult, 4),
-            "demand": round(city_demand, 1),
-            "sold": sold,
-            "revenue": revenue,
-            "market_share": round(market_share_by_city[city_name], 6),
-            "cpi": cpi_by_city[city_name],
-            "market_report": bool(market_report),
+            "market_size": market_size,
+            "base_cpi": round(bc, 4),
+            "uptake": round(up, 4),
+            "demand": round(demand, 1),
         }
 
-    cashflow_rows.append(["Marketing", f"{len(city_cfgs)} cities", fmt_m(-actual_marketing_paid), fmt_m(cash)])
-    if total_agent_cost > 0:
-        cashflow_rows.append(["Agent Cost", "", fmt_m(-actual_agent_cost_paid), fmt_m(cash)])
+    cashflow.append(["Marketing", f"{len(city_cfgs)} cities", fmt(-actual_mkt_paid), fmt(cash)])
+    if actual_agt_paid > 0:
+        cashflow.append(["Agent Cost", "", fmt(-actual_agt_paid), fmt(cash)])
 
-    total_sales_cost_paid = actual_marketing_paid + actual_agent_cost_paid
+    # Pass 2: allocate sales (single-player → gets all demand, capped by supply)
+    total_demand = sum(demand_by_city.values())
+    for city_name in city_cfgs:
+        city_demand = demand_by_city.get(city_name, 0)
+        # Proportional allocation of available products to cities
+        if total_demand > 0:
+            share_of_supply = city_demand / total_demand
+        else:
+            share_of_supply = 0
+        alloc = int(share_of_supply * available)
+        sold = min(alloc, int(city_demand))
+        sold = max(0, sold)
+        sold = min(sold, available - total_sold)
+        sold_by_city[city_name] = sold
+        total_sold += sold
 
-    # ── 5. Storage ───────────────────────────────────────────────────
-    unsold = available_products - total_sold
-    storage_cost = unsold * storage_cost_per_unit
-    actual_storage = min(storage_cost, cash)
-    cash -= actual_storage
-    cashflow_rows.append(["Storage Cost", f"{unsold} unsold × ¥{storage_cost_per_unit:,.0f}", fmt_m(-actual_storage), fmt_m(cash)])
+        price = sales_detail[city_name]["price"]
+        revenue = sold * price
+        revenue_by_city[city_name] = revenue
+        total_revenue += revenue
+        share_by_city[city_name] = sold / max(sales_detail[city_name]["market_size"], 1)
 
-    # ── 6. Interest ──────────────────────────────────────────────────
-    interest_paid = debt * interest_rate
-    actual_interest = min(interest_paid, cash)
-    cash -= actual_interest
-    debt_after_interest = debt + interest_paid  # full interest accrues to debt
-    cashflow_rows.append(["Interest", f"{fmt_pct(interest_rate)} × ¥{debt:,.0f}", fmt_m(-actual_interest), fmt_m(cash)])
+        sales_detail[city_name]["sold"] = sold
+        sales_detail[city_name]["revenue"] = revenue
+        sales_detail[city_name]["market_share"] = round(share_by_city[city_name], 6)
+
+    # ═══════════════════════════════════════════════════════════════
+    # 6. Revenue flows back to cash
+    # ═══════════════════════════════════════════════════════════════
+    cash += total_revenue
+    cashflow.append(["Sales Revenue", f"{total_sold} units sold", fmt(total_revenue), fmt(cash)])
+
+    # ═══════════════════════════════════════════════════════════════
+    # 7. Storage
+    # ═══════════════════════════════════════════════════════════════
+    unsold = available - total_sold
+    storage_needed = unsold * storage_per_unit
+    storage_paid = min(storage_needed, cash)
+    cash -= storage_paid
+    cashflow.append(["Storage Cost", f"{unsold} unsold × ¥{storage_per_unit:,.0f}", fmt(-storage_paid), fmt(cash)])
+
+    # ═══════════════════════════════════════════════════════════════
+    # 8. Interest (full interest accrues to debt)
+    # ═══════════════════════════════════════════════════════════════
+    interest_due = debt * interest_rate
+    interest_paid = min(interest_due, cash)
+    cash -= interest_paid
+    debt_after = debt + interest_due  # full interest accrues
+    cashflow.append(["Interest", f"{pct(interest_rate)} × ¥{debt:,.0f}", fmt(-interest_paid), fmt(cash)])
 
     cash_end = cash
-    total_cost = actual_hr_cost + actual_material_cost + total_sales_cost_paid + actual_storage + actual_interest
-    operating_profit = total_revenue - total_cost
 
-    # ── Build result ─────────────────────────────────────────────────
+    total_cost_paid = total_hr_paid + material_paid + quality_paid + actual_mkt_paid + actual_agt_paid + storage_paid + interest_paid
+    operating_profit = total_revenue - total_cost_paid
+
+    # ═══════════════════════════════════════════════════════════════
+    # Build result
+    # ═══════════════════════════════════════════════════════════════
     new_state = {
         "round": round_index + 1,
         "cash": cash_end,
-        "debt": debt_after_interest,
+        "debt": debt_after,
         "workers": 0,
-        "engineers": new_engineers,
-        "worker_salary": 0.0,
-        "engineer_salary": engineer_salary,
+        "engineers": effective_eng,
+        "engineer_salary": eng_salary,
         "prev_workers": 0,
-        "prev_engineers": current_engineers,
-        "parts_inventory": 0,
+        "prev_engineers": current_eng,
         "products_inventory": unsold,
+        "parts_inventory": 0,
         "patent_count": 0,
         "accumulated_research_investment": 0.0,
         "valuation": cash_end,
@@ -287,78 +402,78 @@ def settle(
         "round": round_index,
         "state": new_state,
         "config_snapshot": {
-            "material_cost_per_unit": material_cost_per_unit,
-            "storage_cost_per_unit": storage_cost_per_unit,
-            "engineer_per_product": eng_per_prod,
-            "engineer_hours_per_product": eng_hours_per_prod,
+            "material_per_unit": material_per_unit,
+            "storage_per_unit": storage_per_unit,
+            "eng_per_product": eng_per_prod,
+            "eng_hours_per_product": eng_hours_per_prod,
             "hours_per_month": hours_per_month,
             "months_per_round": months_per_round,
-            "engineer_salary_min": salary_min,
-            "engineer_salary_max": salary_max,
             "interest_rate": interest_rate,
-            "training_per_engineer": training_per_engineer,
-            "agent_hire_price": agent_hire_price,
-            "agent_fire_price": agent_fire_price,
-            "pqi_old_product_weight": pqi_weight,
+            "training_per_eng": training_per_eng,
+            "agent_hire": agent_hire,
+            "agent_fire": agent_fire,
+            "pqi_weight": pqi_weight,
+            "salary_min": salary_min,
+            "salary_max": salary_max,
         },
         # Finance
         "cash_start": cash_start,
         "bank_amount": bank_amount,
-        "debt_before": debt - bank_amount if bank_amount > 0 else debt + (min(-bank_amount, cash_start) if bank_amount < 0 else 0),
-        "debt_after_interest": debt_after_interest,
+        "debt_before": max(0, debt - bank_amount) if bank_amount > 0 else debt,
+        "debt_after": debt_after,
         "interest_paid": interest_paid,
-        "cashflow_table": cashflow_rows,
+        "interest_due": interest_due,
+        "cashflow_table": cashflow,
         # HR
-        "engineers_prev": current_engineers,
-        "engineers_delta": engineers_delta,
-        "engineers_hired": engineers_hired,
-        "engineers_fired": engineers_fired,
-        "engineers": new_engineers,
-        "engineer_salary": engineer_salary,
-        "total_engineer_salary": actual_hr_cost,
-        "training_cost": training_cost,
-        "total_hr_cost": actual_hr_cost,
+        "eng_planned": current_eng + eng_delta,
+        "eng_effective": effective_eng,
+        "eng_hired": eng_hired,
+        "eng_fired": eng_fired,
+        "eng_salary": eng_salary,
+        "salary_paid": salary_paid,
+        "training_paid": training_paid,
+        "total_hr_paid": total_hr_paid,
         # Production
-        "volume_planned": volume_planned,
-        "quality_investment": quality_investment,
+        "volume_planned": planned_volume,
+        "quality_planned": planned_quality,
+        "quality_paid": quality_paid,
         "quality_bonus": round(quality_bonus, 4),
-        "volume_effective": volume_effective,
+        "effective_volume_input": effective_volume_input,
         "capacity_limit": capacity_limit,
-        "volume_capped": volume_capped,
+        "volume_final": volume_final,
         "products_inventory_before": products_inventory,
         "products_produced": products_produced,
-        "total_engineer_hours": total_engineer_hours,
-        "available_products": available_products,
-        "material_cost_per_unit": material_cost_per_unit,
-        "material_cost_total": actual_material_cost,
-        "storage_cost_per_unit": storage_cost_per_unit,
+        "available": available,
+        "material_paid": material_paid,
+        "material_per_unit": material_per_unit,
+        "storage_paid": storage_paid,
+        "storage_per_unit": storage_per_unit,
         "products_inventory_after": unsold,
-        "storage_cost": actual_storage,
         "pqi": round(pqi, 2),
         # Sales
         "products_sold": total_sold,
         "total_revenue": total_revenue,
-        "total_marketing": actual_marketing_paid,
-        "total_agent_cost": actual_agent_cost_paid,
-        "total_sales_cost": total_sales_cost_paid,
-        "total_interest_paid": actual_interest,
+        "marketing_paid": actual_mkt_paid,
+        "agent_cost_paid": actual_agt_paid,
         "sold_by_city": sold_by_city,
         "revenue_by_city": revenue_by_city,
-        "market_share_by_city": market_share_by_city,
+        "market_share_by_city": share_by_city,
         "cpi_by_city": cpi_by_city,
+        "uptake_by_city": uptake_by_city,
+        "demand_by_city": demand_by_city,
         "sales_detail_by_city": sales_detail,
         # Summary
-        "total_cost": total_cost,
+        "total_cost_paid": total_cost_paid,
         "operating_profit": operating_profit,
     }
 
     summary = {
         "round": round_index,
         "total_assets": cash_end,
-        "debt": debt_after_interest,
-        "net_assets": cash_end - debt_after_interest,
+        "debt": debt_after,
+        "net_assets": cash_end - debt_after,
         "total_revenue": total_revenue,
-        "total_cost": total_cost,
+        "total_cost": total_cost_paid,
         "operating_profit": operating_profit,
     }
 
@@ -368,20 +483,20 @@ def settle(
         "city_results": {
             "sold_by_city": sold_by_city,
             "revenue_by_city": revenue_by_city,
-            "market_share_by_city": market_share_by_city,
+            "market_share_by_city": share_by_city,
             "cpi_by_city": cpi_by_city,
         },
         "ranking_snapshot": {
             "valuation": cash_end,
-            "debt": debt_after_interest,
+            "debt": debt_after,
         },
         "new_state": new_state,
     }
 
 
-def fmt_m(v: float) -> str:
+def fmt(v: float) -> str:
     return f"¥{v:,.2f}"
 
 
-def fmt_pct(v: float) -> str:
+def pct(v: float) -> str:
     return f"{v*100:.1f}%"

@@ -64,7 +64,7 @@ def test_settle_round_produces_structured_output():
     report = result["report"]
     assert len(report) > 10
     assert report["state"]["round"] == 2
-    assert int(report["engineers"]) >= 0
+    assert int(report["eng_effective"]) >= 0
     assert report["sold_by_city"]
 
     # City results
@@ -119,7 +119,7 @@ def test_settle_round_second_round():
     assert float(r2["ranking_snapshot"]["valuation"]) > 0
     assert len(r2["report"]) > 10
     # Round 2 should have more engineers than round 1 (carried over)
-    assert r2["report"]["engineers"] >= r1["report"]["engineers"]
+    assert r2["report"]["eng_effective"] >= r1["report"]["eng_effective"]
 
 
 def test_settle_round_has_no_tax_fields():
