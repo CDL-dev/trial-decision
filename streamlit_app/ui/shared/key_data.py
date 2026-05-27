@@ -49,9 +49,9 @@ def render_mechanics(config: dict):
     col1, col2 = st.columns(2)
     with col1:
         st.metric("Starting Capital", fmt_money(starting_capital))
-        st.metric(
-            "Production Formula",
-            f"1 Product = {eng_per_prod} Engineers x {eng_hours}h + 1 Material (¥{product_material:,.0f})"
+        st.markdown(
+            f"**Production Formula:** 1 Product = {eng_per_prod} Engineers × "
+            f"{eng_hours}h + 1 Material (¥{product_material:,.0f})"
         )
         st.metric("Engineer Salary Range", f"¥{eng_salary_min:,} — ¥{eng_salary_max:,}")
         if price_min and price_max:
