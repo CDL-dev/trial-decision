@@ -62,8 +62,13 @@ def render(db_path: Path):
         st.subheader("Global Decisions")
         col1, col2 = st.columns(2)
         with col1:
-            loan = st.number_input("Loan", min_value=0, value=0, step=100000)
-            engineers_change = st.number_input("Engineers Change", min_value=-10, max_value=20, value=0)
+            home_cfg = next(
+                (c for c in cities_config if c.get("name") == player["home_city"]), {}
+            )
+            max_loan = float(home_cfg.get("max_loan", 0))
+            st.caption(f"Max loan: {fmt_money(max_loan)}")
+            loan = st.number_input("Loan", min_value=0, max_value=int(max_loan) if max_loan > 0 else None, value=0, step=100000)
+            engineers_change = st.number_input("Engineers Change", value=0)
             engineer_salary = st.number_input("Engineer Salary", min_value=0, value=5000, step=500)
         with col2:
             quality_investment = st.number_input("Quality Investment", min_value=0, value=0, step=10000)
