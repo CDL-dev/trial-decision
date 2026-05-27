@@ -73,4 +73,5 @@ def render(db_path: Path):
             st.rerun()
     else:
         if st.button("Go to Next Round"):
+            st.session_state["last_viewed_report_round"] = report_round
             st.rerun()

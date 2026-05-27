@@ -8,7 +8,7 @@ from pathlib import Path
 
 from streamlit_app.engine.adapter import settle_round, load_config
 from streamlit_app.services.match_service import get_match, advance_round, end_match
-from streamlit_app.services.player_service import list_players, get_player_state, update_player_state
+from streamlit_app.services.player_service import list_players, get_player_state
 
 
 def settle_current_round(db_path: Path, match_id: int) -> None:
@@ -85,8 +85,11 @@ def settle_current_round(db_path: Path, match_id: int) -> None:
                 (match_id, current_round, player_id, city_name, json.dumps(city_result)),
             )
 
-        # Update player state
-        update_player_state(db_path, player_id, result["new_state"])
+        # Update player state on the same connection to avoid lock contention
+        conn.execute(
+            "UPDATE players SET state_json = ? WHERE id = ?",
+            (json.dumps(result["new_state"]), player_id),
+        )
 
     conn.commit()
     conn.close()

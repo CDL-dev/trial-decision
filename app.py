@@ -53,6 +53,9 @@ def _get_player_route(db_path, player_id: int) -> str:
     conn.close()
 
     if has_report and not submitted:
+        last_viewed = st.session_state.get("last_viewed_report_round", 0)
+        if last_viewed >= current_round - 1:
+            return "decision"
         return "report"
     if submitted:
         return "waiting"
