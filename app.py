@@ -54,10 +54,7 @@ def _get_player_route(db_path, player_id: int) -> str:
     conn.close()
 
     if has_report and not submitted:
-        last_viewed = st.session_state.get("last_viewed_report_round", 0)
-        if last_viewed >= current_round - 1:
-            return "decision"
-        return "report"
+        return "playing"
     if submitted:
         return "waiting"
     return "decision"
@@ -109,6 +106,25 @@ def _render_admin():
         player_final(DB_PATH)
 
 
+def _render_playing_workspace():
+    """Running state with report available: toggle between Report and Decision."""
+    if "player_view" not in st.session_state:
+        st.session_state["player_view"] = "Report"
+
+    view = st.radio(
+        "View", ["Report", "Decision"],
+        index=0 if st.session_state["player_view"] == "Report" else 1,
+        horizontal=True, key="player_view",
+    )
+
+    if view == "Report":
+        player_report(DB_PATH)
+        if st.session_state.get("force_final"):
+            st.session_state["force_final"] = False
+    else:
+        player_decision(DB_PATH)
+
+
 def _render_player():
     player_id = st.session_state.get("player_id")
 
@@ -136,6 +152,8 @@ def _render_player():
         player_onboarding(DB_PATH)
     elif route == "waiting":
         player_waiting(DB_PATH)
+    elif route == "playing":
+        _render_playing_workspace()
     elif route == "decision":
         player_decision(DB_PATH)
     elif route == "report":

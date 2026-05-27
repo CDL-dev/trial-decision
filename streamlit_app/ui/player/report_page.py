@@ -125,6 +125,6 @@ def render(db_path: Path):
             st.session_state["force_final"] = True
             st.rerun()
     else:
-        if st.button("Go to Next Round"):
-            st.session_state["last_viewed_report_round"] = report_round
+        if st.button("Go to Decision"):
+            st.session_state["player_view"] = "Decision"
             st.rerun()
