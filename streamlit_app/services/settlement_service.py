@@ -76,8 +76,7 @@ def settle_current_round(db_path: Path, match_id: int) -> None:
                 "sold": city_data,
                 "revenue": result["city_results"]["revenue_by_city"].get(city_name, 0),
                 "market_share": result["city_results"]["market_share_by_city"].get(city_name, 0),
-                "cpi_index": result["city_results"]["cpi_index_by_city"].get(city_name, 1.0),
-                "price_index": result["city_results"]["price_index_by_city"].get(city_name, 1.0),
+                "cpi_index": result["city_results"]["cpi_by_city"].get(city_name, 1.0),
             }
             conn.execute(
                 "INSERT INTO round_city_results (match_id, round_index, player_id, city_name, result_json) "
