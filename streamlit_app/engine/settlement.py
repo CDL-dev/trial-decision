@@ -186,6 +186,8 @@ def settle(
     # Quality investment: cash-sensitive
     quality_paid = min(planned_quality, cash)
     cash -= quality_paid
+    if quality_paid > 0:
+        cashflow.append(["Quality Investment", f"planned {fmt(planned_quality)}", fmt(-quality_paid), fmt(cash)])
 
     # Material: pay for planned volume, capped by cash
     material_needed = planned_volume * material_per_unit
