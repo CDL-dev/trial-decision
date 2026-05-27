@@ -2,3 +2,10 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .streamlit/
+.claude/
+.playwright-cli/
+agenthandoff/
+docs/superpowers/
+data/
+*.db
+tests/test_sim_clone_parity_local.py

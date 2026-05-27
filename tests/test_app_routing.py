@@ -4,6 +4,6 @@ from streamlit_app.ui.player.decision_page import get_trial_decision_fields
 
 
 def test_app_routing_dependencies_are_wired():
-    assert APP_TITLE == "Streamlit Simplified Trial"
+    assert APP_TITLE == "Open Test"
     assert get_default_setup_form()["engineer_mechanism"] is True
     assert "city_sales" in get_trial_decision_fields()

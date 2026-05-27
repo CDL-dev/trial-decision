@@ -143,6 +143,27 @@ def test_settle_round_has_no_tax_fields():
     assert "profit_before_tax" not in report
     assert "operating_profit" in report
     assert "cashflow_table" in report
+    assert "cashflow" in report
+    assert report["cashflow_table"][0] == ["Item", "Note", "Cash Flow", "Cash Balance"]
+    assert report["cashflow"]["capital_end"] == result["summary"]["total_assets"]
+    assert report["cashflow"]["debt_after_interest"] == report["debt_after"]
+
+
+def test_settle_round_cashflow_uses_plain_loan_label():
+    """Loan rows should use a plain Loan label without borrow/repay suffixes."""
+    config = load_config("JR")
+    submission = {
+        "loan": 1000000,
+        "engineers_change": 0,
+        "engineer_salary": 8000,
+        "quality_investment": 0,
+        "volume": 0,
+        "city_sales": {},
+    }
+    result = settle_round(submission, config, None, 1, 4, "Shenzhen")
+    labels = [row[0] for row in result["report"]["cashflow_table"][1:]]
+    assert "Loan" in labels
+    assert all(not label.startswith("Loan (") for label in labels)
 
 
 def test_settle_round_zero_price_falls_back_to_city_avg():

@@ -56,7 +56,7 @@ def render(db_path: Path):
         st.warning("Could not load preset data.")
 
     with st.form("create_match_form"):
-        name = st.text_input("Match Name", value="Trial Match")
+        name = st.text_input("Match Name", value="Match")
         player_count = st.selectbox("Players", [1, 2, 3], index=2)
         round_count = st.number_input("Rounds", min_value=1, max_value=3, value=3)
 

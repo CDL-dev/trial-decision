@@ -1,21 +1,14 @@
-"""Multi-player v4m settlement orchestration.
-
-Three phases:
-1. Per-player: cash flow, HR, production → available_products + base_cpi per city
-2. Per-city: city demand → relative share allocation across active teams
-3. Per-player: revenue, storage, interest → final state
-"""
+"""Multi-player trial v4m settlement orchestration."""
 
 from __future__ import annotations
 
 import json
-import math
 import sqlite3
 from pathlib import Path
 
-from streamlit_app.engine.settlement import settle_player_phase1
-from streamlit_app.services.match_service import get_match, advance_round, end_match
-from streamlit_app.services.player_service import list_players, get_player_state
+from streamlit_app.engine.settlement import allocate_trial_v4m, settle_player_phase1, settle_player_phase2
+from streamlit_app.services.match_service import advance_round, end_match, get_match
+from streamlit_app.services.player_service import get_player_state, list_players
 from streamlit_app.trial_schema import normalize_trial_submission
 
 
@@ -27,11 +20,8 @@ def settle_current_round(db_path: Path, match_id: int) -> None:
     current_round = match["current_round"]
     config = json.loads(match["config_json"])
     players = list_players(db_path, match_id)
-    cities_config = config.get("cities_config") or []
-    city_names = [c["name"] for c in cities_config if c.get("name")]
 
-    # ═══ Phase 1: per-player pre-sales ═══════════════════════════════
-    team_states = []
+    team_states: list[dict] = []
     for player in players:
         player_id = player["id"]
         prev_state = get_player_state(db_path, player_id)
@@ -40,8 +30,7 @@ def settle_current_round(db_path: Path, match_id: int) -> None:
         conn_sub = sqlite3.connect(db_path)
         conn_sub.row_factory = sqlite3.Row
         sub = conn_sub.execute(
-            "SELECT payload_json FROM round_submissions "
-            "WHERE match_id = ? AND round_index = ? AND player_id = ?",
+            "SELECT payload_json FROM round_submissions WHERE match_id = ? AND round_index = ? AND player_id = ?",
             (match_id, current_round, player_id),
         ).fetchone()
         conn_sub.close()
@@ -52,10 +41,12 @@ def settle_current_round(db_path: Path, match_id: int) -> None:
             submission = _build_default_submission(config, prev_state)
 
         fv = normalize_trial_submission(submission)
-
         result = settle_player_phase1(
-            fv=fv, config=config, state=state,
-            round_index=current_round, total_rounds=match["round_count"],
+            fv=fv,
+            config=config,
+            state=state,
+            round_index=current_round,
+            total_rounds=match["round_count"],
             player_home_city=player["home_city"] or "",
         )
         result["player_id"] = player_id
@@ -63,108 +54,52 @@ def settle_current_round(db_path: Path, match_id: int) -> None:
         result["company_name"] = player["company_name"]
         team_states.append(result)
 
-    # ═══ Phase 2: per-city v4m allocation ════════════════════════════
+    allocate_trial_v4m(team_states, config)
+
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+    for team in team_states:
+        player_id = team["player_id"]
+        sold = int(team.get("total_sold_allocated", 0))
+        total_revenue = float(sum(team.get("revenue_by_city", {}).values()))
 
-    for city_name in city_names:
-        city_cfg = next((c for c in cities_config if c.get("name") == city_name), {})
-        population = float(city_cfg.get("population", 0))
-        penetration = float(city_cfg.get("initial_penetration", 0.02))
-        market_size = population * penetration
-
-        # Active teams in this city (agents > 0)
-        active = [t for t in team_states if t.get("agents_by_city", {}).get(city_name, 0) > 0]
-
-        # Per-team demand from individual base_cpi, then relative-share allocation
-        uptake_cap = float(config.get("v4m_uptake_max", 0.95))
-        steep = float(config.get("v4m_uptake_steepness", 8.0))
-        mid = float(config.get("v4m_uptake_midpoint", 1.5))
-        # Each active team generates its own demand estimate
-        team_demands: dict[int, float] = {}
-        total_team_demand = 0.0
-        for t in active:
-            cpi_i = t.get("base_cpi_by_city", {}).get(city_name, 0)
-            uptake_i = uptake_cap / (1.0 + math.exp(-steep * (cpi_i - mid)))
-            d_i = market_size * uptake_i
-            team_demands[t["player_id"]] = d_i
-            total_team_demand += d_i
-
-        allocated: dict[int, int] = {}
-        remaining = 0
-        # First pass: proportional floor
-        for t in active:
-            pid = t["player_id"]
-            d_i = team_demands.get(pid, 0)
-            if total_team_demand > 0:
-                a = int(d_i / total_team_demand * market_size * uptake_cap)
-                a = min(a, int(d_i))
-            else:
-                a = 0
-            avail = t.get("available_products", 0) - t.get("total_sold_allocated", 0)
-            a = min(a, avail)
-            a = max(0, a)
-            allocated[pid] = a
-            remaining += a
-        # Second pass: distribute unmet demand to teams with supply remaining
-        remaining_supply = min(int(market_size * uptake_cap), sum(
-            t.get("available_products", 0) - t.get("total_sold_allocated", 0) for t in active
-        )) - remaining
-        for t in sorted(active, key=lambda x: team_demands.get(x["player_id"], 0), reverse=True):
-            if remaining_supply <= 0:
-                break
-            pid = t["player_id"]
-            avail = t.get("available_products", 0) - t.get("total_sold_allocated", 0) - allocated.get(pid, 0)
-            unmet = max(0, int(team_demands.get(pid, 0)) - allocated.get(pid, 0))
-            extra = min(unmet, avail, remaining_supply)
-            if extra > 0:
-                allocated[pid] = allocated.get(pid, 0) + extra
-                remaining_supply -= extra
-
-        for t in active:
-            pid = t["player_id"]
-            alloc = allocated.get(pid, 0)
-            t["total_sold_allocated"] = t.get("total_sold_allocated", 0) + alloc
-            t.setdefault("sold_by_city", {})[city_name] = alloc
-            t.setdefault("revenue_by_city", {})[city_name] = alloc * t.get("price_by_city", {}).get(city_name, 0)
-            cpi_i = t.get("base_cpi_by_city", {}).get(city_name, 0)
-            t.setdefault("cpi_by_city", {})[city_name] = round(cpi_i, 4)
-
-    # ═══ Phase 3: per-player finalize ════════════════════════════════
-    for t in team_states:
-        pid = t["player_id"]
-        sold = t.get("total_sold_allocated", 0)
-        total_revenue = sum(t.get("revenue_by_city", {}).values())
-
-        from streamlit_app.engine.settlement import settle_player_phase2
         result = settle_player_phase2(
-            phase1=t, sold=sold, total_revenue=total_revenue,
+            phase1=team,
+            sold=sold,
+            total_revenue=total_revenue,
             config=config,
         )
 
         conn.execute(
             "INSERT INTO round_results (match_id, round_index, player_id, summary_json, report_json, ranking_snapshot_json) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (match_id, current_round, pid,
-             json.dumps(result["summary"]), json.dumps(result["report"]), json.dumps(result["ranking_snapshot"])),
+            (
+                match_id,
+                current_round,
+                player_id,
+                json.dumps(result["summary"]),
+                json.dumps(result["report"]),
+                json.dumps(result["ranking_snapshot"]),
+            ),
         )
 
         for city_name, sold_city in result.get("sold_by_city", {}).items():
             city_result = {
-                "city_name": city_name, "sold": sold_city,
+                "city_name": city_name,
+                "sold": sold_city,
                 "revenue": result.get("revenue_by_city", {}).get(city_name, 0),
                 "market_share": result.get("market_share_by_city", {}).get(city_name, 0),
-                "cpi_index": result.get("cpi_by_city", {}).get(city_name, 1.0),
+                "cpi_index": result.get("cpi_by_city", {}).get(city_name, 0),
             }
             conn.execute(
                 "INSERT INTO round_city_results (match_id, round_index, player_id, city_name, result_json) "
                 "VALUES (?, ?, ?, ?, ?)",
-                (match_id, current_round, pid, city_name, json.dumps(city_result)),
+                (match_id, current_round, player_id, city_name, json.dumps(city_result)),
             )
 
         conn.execute(
             "UPDATE players SET state_json = ? WHERE id = ?",
-            (json.dumps(result["new_state"]), pid),
+            (json.dumps(result["new_state"]), player_id),
         )
 
     conn.commit()
@@ -182,17 +117,24 @@ def _build_default_submission(config: dict, prev_state: dict | None = None) -> d
     for city in cities_config:
         name = city.get("name", "")
         city_sales[name] = {
-            "agents": 0, "marketing": 0,
+            "agents": 0,
+            "marketing": 0,
             "price": float(city.get("avg_price", 5000)),
             "market_report": False,
         }
+
     default_salary = float(config.get("initial_engineer_salary", 5000))
     if prev_state:
         prev_eng = int(prev_state.get("engineers", 0))
         prev_sal = float(prev_state.get("engineer_salary", 0))
         if prev_eng > 0 and prev_sal > 0:
             default_salary = prev_sal
+
     return {
-        "loan": 0, "engineers_change": 0, "engineer_salary": default_salary,
-        "quality_investment": 0, "volume": 0, "city_sales": city_sales,
+        "loan": 0,
+        "engineers_change": 0,
+        "engineer_salary": default_salary,
+        "quality_investment": 0,
+        "volume": 0,
+        "city_sales": city_sales,
     }

@@ -103,7 +103,7 @@ def _render_admin():
                     st.rerun()
         # Show final results
         st.session_state["player_id"] = None
-        player_final(DB_PATH)
+        player_final(DB_PATH, admin_mode=True)
 
 
 def _render_playing_workspace():

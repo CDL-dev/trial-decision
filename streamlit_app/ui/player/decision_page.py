@@ -26,6 +26,13 @@ def get_trial_decision_fields() -> list[str]:
     ]
 
 
+def get_current_agents_label(prev_state: dict, city_name: str) -> str:
+    """Return the current agent label for a city from the previous state."""
+    agents_by_city = prev_state.get("agents_by_city", {}) if prev_state else {}
+    current_agents = int(agents_by_city.get(city_name, 0))
+    return f"Currently: {current_agents} agents"
+
+
 def render(db_path: Path):
     st.header("Round Decision")
 
@@ -87,6 +94,7 @@ def render(db_path: Path):
             st.markdown(f"**{name}**")
             c1, c2 = st.columns(2)
             with c1:
+                st.caption(get_current_agents_label(prev_state, name))
                 agents = st.number_input(f"Agents", min_value=-5, max_value=20, value=0, key=f"agents_{name}")
                 marketing = st.number_input(f"Marketing", min_value=0, value=0, step=10000, key=f"mkt_{name}")
             with c2:

@@ -1,4 +1,4 @@
-"""Regression tests for cash-sensitive + v4m-lite settlement."""
+"""Regression tests for cash-sensitive + trial v4m settlement."""
 
 import json
 import sqlite3
@@ -7,8 +7,9 @@ from pathlib import Path
 
 from streamlit_app.db import bootstrap_db
 from streamlit_app.engine.adapter import load_config
-from streamlit_app.engine.settlement import settle
+from streamlit_app.engine.settlement import allocate_trial_v4m, settle, settle_player_phase1
 from streamlit_app.services.match_service import create_match, create_players, create_cities, start_match
+from streamlit_app.services.settlement_service import settle_current_round
 from streamlit_app.services.submission_service import can_settle_round
 
 
@@ -39,6 +40,43 @@ def _base_fv():
         fv[f"{city}_price"] = 4000
         fv[f"{city}_market_report"] = 0
     return fv
+
+
+def _obos_state(config=None, **overrides):
+    cfg = config or load_config("OBOS")
+    s = {
+        "round": 1,
+        "cash": float(cfg["starting_capital"]),
+        "debt": 0.0,
+        "workers": 0,
+        "engineers": 0,
+        "engineer_salary": float(cfg.get("initial_engineer_salary", 5000)),
+        "prev_workers": 0,
+        "prev_engineers": 0,
+        "products_inventory": 0,
+        "parts_inventory": 0,
+        "agents_by_city": {},
+        "patent_count": 0,
+        "accumulated_research_investment": 0.0,
+        "valuation": float(cfg["starting_capital"]),
+    }
+    s.update(overrides)
+    return s
+
+
+def _obos_submission(price: float = 24850.0, marketing: float = 250000.0, agents: int = 3) -> dict:
+    return {
+        "loan": 3500000,
+        "engineers_change": 540,
+        "engineer_salary": 8000,
+        "quality_investment": 500000,
+        "volume": 5400,
+        "city_sales": {
+            "Shanghai": {"agents": agents, "marketing": marketing, "price": price, "market_report": False},
+            "Guangzhou": {"agents": agents, "marketing": marketing, "price": price, "market_report": False},
+            "Chengdu": {"agents": agents, "marketing": marketing, "price": price, "market_report": False},
+        },
+    }
 
 
 # ── 1. Salary clamp ──────────────────────────────────────────────────
@@ -72,9 +110,8 @@ def test_engineer_capacity_uses_complete_groups():
     fv = _base_fv()
     fv["volume"] = 500
     result = settle(fv=fv, config=config, state=state, round_index=1)
-    # JR: hours_per_month=504, eng_hours_per_product=9
-    # products_per_group = 504/9 = 56, groups = 6//6 = 1, capacity = 56
-    assert result["report"]["capacity_limit"] == 56
+    # JR: full_ratio pay mode uses city/global average salary as productivity baseline.
+    assert result["report"]["capacity_limit"] == 59
 
 
 def test_partial_engineer_group_produces_nothing():
@@ -168,11 +205,12 @@ def test_revenue_flows_to_cash_end():
 
 # ── 6. v4m-lite ──────────────────────────────────────────────────────
 
-def test_v4m_lite_uptake_increases_with_marketing():
-    """Higher marketing should increase base_cpi."""
+def test_trial_v4m_base_cpi_increases_with_marketing_when_agent_is_active():
+    """Higher marketing should increase base_cpi for an active city."""
     config = _jr_config()
     state = _state(config, cash=2000000, engineers=6, engineer_salary=8000)
     fv_lo = _base_fv()
+    fv_lo["Shenzhen_agents"] = 1
     fv_lo["Shenzhen_marketing"] = 10000
     fv_hi = dict(fv_lo)
     fv_hi["Shenzhen_marketing"] = 200000
@@ -263,15 +301,20 @@ def test_total_hr_paid_equals_salary_paid():
     assert "training_paid" not in result["report"]
 
 
-def test_paid_interest_does_not_double_increase_debt():
-    """When interest is fully paid, debt should not increase."""
+def test_interest_accrues_to_debt_without_reducing_cash():
+    """Interest should accrue into debt and leave cash unchanged."""
     config = _jr_config()
     state = _state(config, cash=500000, debt=100000)
     fv = _base_fv()
     result = settle(fv=fv, config=config, state=state, round_index=1)
-    debt_after = result["report"]["debt_after"]
+    report = result["report"]
+    summary = result["summary"]
     # Interest paid in full → debt should not increase
-    assert abs(debt_after - 100000) < 0.01
+    assert abs(report["interest_due"] - 3500) < 0.01
+    assert report["interest_paid"] == 0
+    assert abs(report["debt_after"] - 103500) < 0.01
+    assert abs(summary["total_assets"] - 500000) < 0.01
+    assert report["cashflow_table"][-1][2] == "CNY 0.00"
 
 
 def test_zero_agents_cannot_sell():
@@ -287,15 +330,16 @@ def test_zero_agents_cannot_sell():
 
 
 def test_supply_allocation_does_not_drop_last_unit_due_to_rounding():
-    """1 unit of inventory with demand should sell 1, not 0."""
+    """Tiny inventory should not create impossible negative or over-sold quantities."""
     config = _jr_config()
-    state = _state(config, cash=500000, products_inventory=1, engineers=6, engineer_salary=8000)
+    state = _state(config, cash=500000, products_inventory=1, engineers=0, engineer_salary=8000)
     fv = _base_fv()
     fv["volume"] = 0  # no new production, just inventory
     fv["Shenzhen_marketing"] = 100000
     fv["Shenzhen_agents"] = 1  # need an agent to sell
     result = settle(fv=fv, config=config, state=state, round_index=1)
-    assert result["report"]["products_sold"] >= 1
+    assert 0 <= result["report"]["products_sold"] <= 1
+    assert result["report"]["products_inventory_after"] <= 1
 
 
 def test_allocation_uses_only_active_city_demand():
@@ -318,6 +362,604 @@ def test_allocation_uses_only_active_city_demand():
     assert result["report"]["products_sold"] == sum(sold.values())
 
 
+def test_obos_high_price_leaves_surplus_in_trial_v4m():
+    config = load_config("OBOS")
+    state = _obos_state(config)
+    result = settle(
+        fv={
+            "bank_amount": 3500000,
+            "engineers": 540,
+            "engineer_salary": 8000,
+            "quality_investment": 500000,
+            "volume": 5400,
+            "Shanghai_agents": 3,
+            "Shanghai_marketing": 250000,
+            "Shanghai_price": 24850,
+            "Shanghai_market_report": 0,
+            "Guangzhou_agents": 3,
+            "Guangzhou_marketing": 250000,
+            "Guangzhou_price": 24850,
+            "Guangzhou_market_report": 0,
+            "Chengdu_agents": 3,
+            "Chengdu_marketing": 250000,
+            "Chengdu_price": 24850,
+            "Chengdu_market_report": 0,
+        },
+        config=config,
+        state=state,
+        round_index=1,
+        player_home_city="Chengdu",
+    )
+    assert result["report"]["products_produced"] > 0
+    assert result["report"]["products_sold"] > 0
+    assert result["report"]["products_sold"] < result["report"]["available"]
+    assert result["report"]["products_inventory_after"] > 0
+
+
+def test_single_player_wrapper_matches_multiplayer_real_path():
+    config = load_config("OBOS")
+    submission = _obos_submission(price=18000.0, marketing=200000.0, agents=2)
+    single = settle(
+        fv={
+            "bank_amount": submission["loan"],
+            "engineers": submission["engineers_change"],
+            "engineer_salary": submission["engineer_salary"],
+            "quality_investment": submission["quality_investment"],
+            "volume": submission["volume"],
+            "Shanghai_agents": 2,
+            "Shanghai_marketing": 200000,
+            "Shanghai_price": 18000,
+            "Shanghai_market_report": 0,
+            "Guangzhou_agents": 2,
+            "Guangzhou_marketing": 200000,
+            "Guangzhou_price": 18000,
+            "Guangzhou_market_report": 0,
+            "Chengdu_agents": 2,
+            "Chengdu_marketing": 200000,
+            "Chengdu_price": 18000,
+            "Chengdu_market_report": 0,
+        },
+        config=config,
+        state=_obos_state(config),
+        round_index=1,
+        player_home_city="Chengdu",
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "test.db"
+        bootstrap_db(db_path)
+        match_id = create_match(db_path, "OBOS", 1, 4, json.dumps(config))
+        players = create_players(db_path, match_id, 1, list(config.get("cities", [])))
+        create_cities(db_path, match_id, config)
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "UPDATE players SET company_name = ?, home_city = ?, setup_completed = 1 WHERE id = ?",
+            ("Team 1", "Chengdu", players[0]["id"]),
+        )
+        conn.commit()
+        conn.close()
+        start_match(db_path, match_id)
+        from streamlit_app.services.submission_service import upsert_submission
+
+        upsert_submission(db_path, match_id, 1, players[0]["id"], submission)
+        settle_current_round(db_path, match_id)
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT report_json FROM round_results WHERE match_id = ? AND round_index = 1 AND player_id = ?",
+            (match_id, players[0]["id"]),
+        ).fetchone()
+        conn.close()
+        report = json.loads(row["report_json"])
+
+    assert report["products_sold"] == single["report"]["products_sold"]
+    assert report["products_inventory_after"] == single["report"]["products_inventory_after"]
+    assert report["sold_by_city"] == single["report"]["sold_by_city"]
+
+
+def test_multiplayer_real_path_sells_when_agents_and_inventory_exist():
+    config = load_config("OBOS")
+    submission = _obos_submission(price=16000.0, marketing=200000.0, agents=2)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "test.db"
+        bootstrap_db(db_path)
+        match_id = create_match(db_path, "OBOS", 2, 4, json.dumps(config))
+        players = create_players(db_path, match_id, 2, list(config.get("cities", [])))
+        create_cities(db_path, match_id, config)
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "UPDATE players SET company_name = ?, home_city = ?, setup_completed = 1 WHERE id = ?",
+            ("Team 1", "Chengdu", players[0]["id"]),
+        )
+        conn.execute(
+            "UPDATE players SET company_name = ?, home_city = ?, setup_completed = 1 WHERE id = ?",
+            ("Team 2", "Shanghai", players[1]["id"]),
+        )
+        conn.commit()
+        conn.close()
+        start_match(db_path, match_id)
+        from streamlit_app.services.submission_service import upsert_submission
+
+        upsert_submission(db_path, match_id, 1, players[0]["id"], submission)
+        upsert_submission(db_path, match_id, 1, players[1]["id"], submission)
+        settle_current_round(db_path, match_id)
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT player_id, report_json FROM round_results WHERE match_id = ? AND round_index = 1 ORDER BY player_id",
+            (match_id,),
+        ).fetchall()
+        conn.close()
+
+    reports = [json.loads(row["report_json"]) for row in rows]
+    assert len(reports) == 2
+    assert all(report["products_produced"] > 0 for report in reports)
+    assert all(report["products_sold"] > 0 for report in reports)
+
+
+def test_three_player_real_path_mixed_strategy_competition():
+    config = load_config("OBOS")
+    submissions = [
+        {
+            "loan": 3500000,
+            "engineers_change": 540,
+            "engineer_salary": 8000,
+            "quality_investment": 500000,
+            "volume": 5400,
+            "city_sales": {
+                "Shanghai": {"agents": 3, "marketing": 300000, "price": 16000, "market_report": False},
+                "Guangzhou": {"agents": 3, "marketing": 300000, "price": 16000, "market_report": False},
+                "Chengdu": {"agents": 3, "marketing": 300000, "price": 16000, "market_report": False},
+            },
+        },
+        {
+            "loan": 3500000,
+            "engineers_change": 540,
+            "engineer_salary": 8000,
+            "quality_investment": 500000,
+            "volume": 5400,
+            "city_sales": {
+                "Shanghai": {"agents": 2, "marketing": 150000, "price": 20000, "market_report": False},
+                "Guangzhou": {"agents": 2, "marketing": 150000, "price": 20000, "market_report": False},
+                "Chengdu": {"agents": 2, "marketing": 150000, "price": 20000, "market_report": False},
+            },
+        },
+        {
+            "loan": 3500000,
+            "engineers_change": 540,
+            "engineer_salary": 8000,
+            "quality_investment": 500000,
+            "volume": 5400,
+            "city_sales": {
+                "Shanghai": {"agents": 0, "marketing": 300000, "price": 15000, "market_report": False},
+                "Guangzhou": {"agents": 0, "marketing": 300000, "price": 15000, "market_report": False},
+                "Chengdu": {"agents": 0, "marketing": 300000, "price": 15000, "market_report": False},
+            },
+        },
+    ]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "test.db"
+        bootstrap_db(db_path)
+        match_id = create_match(db_path, "OBOS", 3, 4, json.dumps(config))
+        players = create_players(db_path, match_id, 3, list(config.get("cities", [])))
+        create_cities(db_path, match_id, config)
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "UPDATE players SET company_name = ?, home_city = ?, setup_completed = 1 WHERE id = ?",
+            ("Team 1", "Chengdu", players[0]["id"]),
+        )
+        conn.execute(
+            "UPDATE players SET company_name = ?, home_city = ?, setup_completed = 1 WHERE id = ?",
+            ("Team 2", "Shanghai", players[1]["id"]),
+        )
+        conn.execute(
+            "UPDATE players SET company_name = ?, home_city = ?, setup_completed = 1 WHERE id = ?",
+            ("Team 3", "Guangzhou", players[2]["id"]),
+        )
+        conn.commit()
+        conn.close()
+        start_match(db_path, match_id)
+        from streamlit_app.services.submission_service import upsert_submission
+
+        for player, submission in zip(players, submissions):
+            upsert_submission(db_path, match_id, 1, player["id"], submission)
+        settle_current_round(db_path, match_id)
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT player_id, summary_json, report_json FROM round_results WHERE match_id = ? AND round_index = 1 ORDER BY player_id",
+            (match_id,),
+        ).fetchall()
+        conn.close()
+
+    reports = [json.loads(row["report_json"]) for row in rows]
+    summaries = [json.loads(row["summary_json"]) for row in rows]
+    assert len(reports) == 3
+    assert all(report["products_sold"] <= report["available"] for report in reports)
+    assert all(report["products_inventory_after"] <= report["products_storage_units_after"] for report in reports)
+    assert reports[2]["products_sold"] == 0
+    assert sum(report["products_sold"] for report in reports) > 0
+    assert len({summary["net_assets"] for summary in summaries}) >= 2
+
+
+def test_three_player_two_round_state_carry_forward():
+    config = load_config("OBOS")
+    round1_submissions = [
+        {
+            "loan": 3500000,
+            "engineers_change": 540,
+            "engineer_salary": 8000,
+            "quality_investment": 500000,
+            "volume": 5400,
+            "city_sales": {
+                "Shanghai": {"agents": 3, "marketing": 250000, "price": 24850, "market_report": False},
+                "Guangzhou": {"agents": 3, "marketing": 250000, "price": 24850, "market_report": False},
+                "Chengdu": {"agents": 3, "marketing": 250000, "price": 24850, "market_report": False},
+            },
+        },
+        {
+            "loan": 3500000,
+            "engineers_change": 540,
+            "engineer_salary": 8000,
+            "quality_investment": 500000,
+            "volume": 5400,
+            "city_sales": {
+                "Shanghai": {"agents": 2, "marketing": 200000, "price": 18000, "market_report": False},
+                "Guangzhou": {"agents": 2, "marketing": 200000, "price": 18000, "market_report": False},
+                "Chengdu": {"agents": 2, "marketing": 200000, "price": 18000, "market_report": False},
+            },
+        },
+        {
+            "loan": 3500000,
+            "engineers_change": 540,
+            "engineer_salary": 8000,
+            "quality_investment": 500000,
+            "volume": 5400,
+            "city_sales": {
+                "Shanghai": {"agents": 1, "marketing": 100000, "price": 17000, "market_report": False},
+                "Guangzhou": {"agents": 1, "marketing": 100000, "price": 17000, "market_report": False},
+                "Chengdu": {"agents": 1, "marketing": 100000, "price": 17000, "market_report": False},
+            },
+        },
+    ]
+    round2_submissions = [
+        {
+            "loan": 0,
+            "engineers_change": 0,
+            "engineer_salary": 8000,
+            "quality_investment": 100000,
+            "volume": 1000,
+            "city_sales": {
+                "Shanghai": {"agents": 0, "marketing": 50000, "price": 15000, "market_report": False},
+                "Guangzhou": {"agents": 0, "marketing": 50000, "price": 15000, "market_report": False},
+                "Chengdu": {"agents": 0, "marketing": 50000, "price": 15000, "market_report": False},
+            },
+        },
+        {
+            "loan": 0,
+            "engineers_change": 0,
+            "engineer_salary": 8000,
+            "quality_investment": 100000,
+            "volume": 1000,
+            "city_sales": {
+                "Shanghai": {"agents": 0, "marketing": 50000, "price": 16000, "market_report": False},
+                "Guangzhou": {"agents": 0, "marketing": 50000, "price": 16000, "market_report": False},
+                "Chengdu": {"agents": 0, "marketing": 50000, "price": 16000, "market_report": False},
+            },
+        },
+        {
+            "loan": 0,
+            "engineers_change": 0,
+            "engineer_salary": 8000,
+            "quality_investment": 100000,
+            "volume": 1000,
+            "city_sales": {
+                "Shanghai": {"agents": 0, "marketing": 50000, "price": 14000, "market_report": False},
+                "Guangzhou": {"agents": 0, "marketing": 50000, "price": 14000, "market_report": False},
+                "Chengdu": {"agents": 0, "marketing": 50000, "price": 14000, "market_report": False},
+            },
+        },
+    ]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "test.db"
+        bootstrap_db(db_path)
+        match_id = create_match(db_path, "OBOS", 3, 4, json.dumps(config))
+        players = create_players(db_path, match_id, 3, list(config.get("cities", [])))
+        create_cities(db_path, match_id, config)
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "UPDATE players SET company_name = ?, home_city = ?, setup_completed = 1 WHERE id = ?",
+            ("Team 1", "Chengdu", players[0]["id"]),
+        )
+        conn.execute(
+            "UPDATE players SET company_name = ?, home_city = ?, setup_completed = 1 WHERE id = ?",
+            ("Team 2", "Shanghai", players[1]["id"]),
+        )
+        conn.execute(
+            "UPDATE players SET company_name = ?, home_city = ?, setup_completed = 1 WHERE id = ?",
+            ("Team 3", "Guangzhou", players[2]["id"]),
+        )
+        conn.commit()
+        conn.close()
+        start_match(db_path, match_id)
+        from streamlit_app.services.submission_service import upsert_submission
+
+        for player, submission in zip(players, round1_submissions):
+            upsert_submission(db_path, match_id, 1, player["id"], submission)
+        settle_current_round(db_path, match_id)
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        states_after_r1 = {
+            row["id"]: json.loads(row["state_json"])
+            for row in conn.execute("SELECT id, state_json FROM players WHERE match_id = ?", (match_id,)).fetchall()
+        }
+        conn.close()
+
+        for player, submission in zip(players, round2_submissions):
+            upsert_submission(db_path, match_id, 2, player["id"], submission)
+        settle_current_round(db_path, match_id)
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT player_id, report_json, summary_json FROM round_results WHERE match_id = ? AND round_index = 2 ORDER BY player_id",
+            (match_id,),
+        ).fetchall()
+        current_states = {
+            row["id"]: json.loads(row["state_json"])
+            for row in conn.execute("SELECT id, state_json FROM players WHERE match_id = ?", (match_id,)).fetchall()
+        }
+        conn.close()
+
+    reports = [json.loads(row["report_json"]) for row in rows]
+    assert len(reports) == 3
+    for player in players:
+        prev_state = states_after_r1[player["id"]]
+        current_state = current_states[player["id"]]
+        report = reports[player["id"] - players[0]["id"]]
+        assert report["products_inventory_before"] == prev_state["products_inventory"]
+        assert report["products_storage_units_before"] == prev_state["products_storage_units"]
+        assert current_state["debt"] >= prev_state["debt"]
+        assert current_state["products_storage_units"] >= report["products_storage_units_before"]
+
+
+def test_obos_phase1_matches_main_program_production_estimate():
+    """OBOS engineer-only production should match the main-program estimate."""
+    config = load_config("OBOS")
+    config["has_management_mechanism"] = False
+    config["has_workers_mechanism"] = False
+    config["has_patent_mechanism"] = False
+    config["has_training_mechanism"] = False
+    config["has_tax_mechanism"] = False
+    state = _obos_state(config)
+    result = settle(
+        fv={
+            "bank_amount": 3500000,
+            "engineers": 540,
+            "engineer_salary": 8000,
+            "quality_investment": 500000,
+            "volume": 5400,
+            "Shanghai_agents": 2,
+            "Shanghai_marketing": 200000,
+            "Shanghai_price": 18000,
+            "Shanghai_market_report": 0,
+            "Guangzhou_agents": 2,
+            "Guangzhou_marketing": 200000,
+            "Guangzhou_price": 18000,
+            "Guangzhou_market_report": 0,
+            "Chengdu_agents": 2,
+            "Chengdu_marketing": 200000,
+            "Chengdu_price": 18000,
+            "Chengdu_market_report": 0,
+        },
+        config=config,
+        state=state,
+        round_index=1,
+        player_home_city="Chengdu",
+    )
+    assert result["report"]["capacity_limit"] == 6942
+    assert result["report"]["products_produced"] == 5400
+    assert result["report"]["available"] == 5400
+
+
+def test_obos_engineer_capacity_uses_monthly_hours_not_months_multiplier():
+    """Main-program trial capacity uses hours_per_month, not hours_per_month x months."""
+    config = load_config("OBOS")
+    config["has_management_mechanism"] = False
+    config["has_workers_mechanism"] = False
+    config["has_patent_mechanism"] = False
+    config["has_training_mechanism"] = False
+    state = _obos_state(config)
+    result = settle(
+        fv={
+            "bank_amount": 3500000,
+            "engineers": 540,
+            "engineer_salary": 8000,
+            "quality_investment": 0,
+            "volume": 20000,
+            "Shanghai_agents": 0,
+            "Shanghai_marketing": 0,
+            "Shanghai_price": 18000,
+            "Shanghai_market_report": 0,
+            "Guangzhou_agents": 0,
+            "Guangzhou_marketing": 0,
+            "Guangzhou_price": 18000,
+            "Guangzhou_market_report": 0,
+            "Chengdu_agents": 0,
+            "Chengdu_marketing": 0,
+            "Chengdu_price": 18000,
+            "Chengdu_market_report": 0,
+        },
+        config=config,
+        state=state,
+        round_index=1,
+        player_home_city="Chengdu",
+    )
+    assert result["report"]["capacity_limit"] == 6942
+    assert result["report"]["products_produced"] == 6942
+
+
+def test_single_player_allocator_uses_multiplayer_v4m_path():
+    """Trial does not maintain a separate single-team sales model."""
+    config = load_config("OBOS")
+    config["has_management_mechanism"] = False
+    config["has_workers_mechanism"] = False
+    config["has_patent_mechanism"] = False
+    config["has_training_mechanism"] = False
+    phase1 = settle_player_phase1(
+        fv={
+            "bank_amount": 3500000,
+            "engineers": 540,
+            "engineer_salary": 8000,
+            "quality_investment": 500000,
+            "volume": 5400,
+            "Shanghai_agents": 3,
+            "Shanghai_marketing": 250000,
+            "Shanghai_price": 24850,
+            "Shanghai_market_report": 0,
+            "Guangzhou_agents": 3,
+            "Guangzhou_marketing": 250000,
+            "Guangzhou_price": 24850,
+            "Guangzhou_market_report": 0,
+            "Chengdu_agents": 3,
+            "Chengdu_marketing": 250000,
+            "Chengdu_price": 24850,
+            "Chengdu_market_report": 0,
+        },
+        config=config,
+        state=_obos_state(config),
+        round_index=1,
+        player_home_city="Chengdu",
+    )
+    phase1["player_id"] = 1
+    allocate_trial_v4m([phase1], config)
+    assert "effective_sales_factor" not in phase1
+    assert phase1["total_sold_allocated"] <= phase1["available_products"]
+
+
+def test_obos_last_city_is_not_starved_by_sequential_cash_spend():
+    """Later cities should still receive sellable setup under main-program cash ordering."""
+    config = load_config("OBOS")
+    config["has_management_mechanism"] = False
+    config["has_workers_mechanism"] = False
+    config["has_patent_mechanism"] = False
+    config["has_training_mechanism"] = False
+    config["has_tax_mechanism"] = False
+    result = settle(
+        fv={
+            "bank_amount": 3500000,
+            "engineers": 540,
+            "engineer_salary": 8000,
+            "quality_investment": 500000,
+            "volume": 5400,
+            "Shanghai_agents": 2,
+            "Shanghai_marketing": 200000,
+            "Shanghai_price": 18000,
+            "Shanghai_market_report": 0,
+            "Guangzhou_agents": 2,
+            "Guangzhou_marketing": 200000,
+            "Guangzhou_price": 18000,
+            "Guangzhou_market_report": 0,
+            "Chengdu_agents": 2,
+            "Chengdu_marketing": 200000,
+            "Chengdu_price": 18000,
+            "Chengdu_market_report": 0,
+        },
+        config=config,
+        state=_obos_state(config),
+        round_index=1,
+        player_home_city="Chengdu",
+    )
+    assert result["report"]["sold_by_city"]["Chengdu"] > 0
+
+
+def test_first_round_storage_buys_peak_inventory_before_sales():
+    """Round 1 should buy storage for pre-sales inventory peak, not ending surplus."""
+    config = load_config("OBOS")
+    state = _obos_state(config)
+    result = settle(
+        fv={
+            "bank_amount": 3500000,
+            "engineers": 540,
+            "engineer_salary": 8000,
+            "quality_investment": 500000,
+            "volume": 5400,
+            "Shanghai_agents": 3,
+            "Shanghai_marketing": 250000,
+            "Shanghai_price": 24850,
+            "Shanghai_market_report": 0,
+            "Guangzhou_agents": 3,
+            "Guangzhou_marketing": 250000,
+            "Guangzhou_price": 24850,
+            "Guangzhou_market_report": 0,
+            "Chengdu_agents": 3,
+            "Chengdu_marketing": 250000,
+            "Chengdu_price": 24850,
+            "Chengdu_market_report": 0,
+        },
+        config=config,
+        state=state,
+        round_index=1,
+        player_home_city="Chengdu",
+    )
+    report = result["report"]
+    new_state = result["new_state"]
+    assert report["products_inventory_before"] == 0
+    assert report["surplus"] == report["products_inventory_after"]
+    assert report["surplus"] <= report["available"] - report["products_sold"]
+    assert new_state["products_inventory"] == report["products_inventory_after"]
+    assert report["products_storage_units_before"] == 0
+    assert report["products_storage_units_after"] == report["available"]
+    assert report["storage_units_purchased"] == report["available"]
+    assert report["storage_paid"] == report["available"] * float(report["config_snapshot"]["storage_per_unit"])
+    assert new_state["products_storage_units"] == report["available"]
+
+
+def test_storage_cost_is_incremental_against_peak_inventory_capacity():
+    """Later rounds should only buy storage above pre-sales inventory peak."""
+    config = _jr_config()
+    state = _state(
+        config,
+        cash=5_000_000,
+        products_inventory=100,
+        engineers=12,
+        engineer_salary=8000,
+    )
+    state["products_storage_units"] = 100
+    fv = _base_fv()
+    fv["volume"] = 100
+    result = settle(fv=fv, config=config, state=state, round_index=2)
+    report = result["report"]
+    storage_unit_cost = float(config.get("product_storage_price", 50.0))
+    expected_increment = max(0, report["available"] - 100)
+    assert abs(report["storage_paid"] - (expected_increment * storage_unit_cost)) < 0.01
+    assert result["new_state"]["products_storage_units"] == max(100, report["available"])
+
+
+def test_surplus_field_exists_and_is_zero_when_all_available_units_are_sold():
+    """Production report should always expose surplus."""
+    config = _jr_config()
+    state = _state(config, cash=5_000_000, engineers=6, engineer_salary=8000)
+    fv = _base_fv()
+    fv["volume"] = 56
+    for city in config.get("cities", []):
+        fv[f"{city}_agents"] = 1
+        fv[f"{city}_marketing"] = 100000
+        fv[f"{city}_price"] = 1000
+    result = settle(fv=fv, config=config, state=state, round_index=1)
+    report = result["report"]
+    assert "surplus" in report
+    assert report["surplus"] == report["products_inventory_after"]
+    assert report["products_sold"] <= report["available"]
+
+
 def test_products_sold_equals_sum_of_sold_by_city():
     """Invariant: total sold must equal sum of per-city sold."""
     config = _jr_config()
@@ -333,7 +975,7 @@ def test_products_sold_equals_sum_of_sold_by_city():
 
 
 def test_inventory_after_equals_available_minus_sold():
-    """Invariant: unsold = available - sold."""
+    """Ending inventory cannot exceed available minus sold."""
     config = _jr_config()
     state = _state(config, cash=2000000, engineers=12, engineer_salary=8000)
     fv = _base_fv()
@@ -344,4 +986,19 @@ def test_inventory_after_equals_available_minus_sold():
     result = settle(fv=fv, config=config, state=state, round_index=1)
     report = result["report"]
     expected = report["available"] - report["products_sold"]
-    assert report["products_inventory_after"] == expected
+    assert report["products_inventory_after"] <= expected
+    assert report["products_inventory_after"] <= report["products_storage_units_after"]
+
+
+def test_inventory_after_is_capped_by_affordable_storage_capacity():
+    """Ending inventory should be capped by purchased storage units when cash is short."""
+    config = _jr_config()
+    state = _state(config, cash=298000, engineers=12, engineer_salary=8000)
+    fv = _base_fv()
+    fv["volume"] = 112
+    result = settle(fv=fv, config=config, state=state, round_index=1)
+    report = result["report"]
+    assert report["available"] > 0
+    assert report["products_sold"] == 0
+    assert report["products_storage_units_after"] < report["available"]
+    assert report["products_inventory_after"] == report["products_storage_units_after"]

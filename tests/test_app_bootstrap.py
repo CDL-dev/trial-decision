@@ -9,6 +9,11 @@ def test_app_entry_and_package_exist():
     assert (ROOT / "streamlit_app" / "__init__.py").exists()
 
 
+def test_runtime_requirements_include_pandas_for_app_imports():
+    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    assert "pandas" in requirements
+
+
 def test_app_module_is_importable():
     path = ROOT / "app.py"
     spec = importlib.util.spec_from_file_location("streamlit_app", path)
