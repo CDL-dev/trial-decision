@@ -93,7 +93,7 @@ def settle(
     interest_rate = float(config.get("bank_interest_rate", 0.0))
     material_per_unit = float(config.get("product_material_price", 800.0))
     storage_per_unit = float(config.get("product_storage_price", 50.0))
-    training_per_eng = float(config.get("training_cost_per_engineer", 0.0))
+    # Training mechanism removed per trial design
     agent_hire = float(config.get("agent_hire_price", 300_000))
     agent_fire = float(config.get("agent_fire_price", 100_000))
     pqi_weight = float(config.get("pqi_old_product_weight", 1.1))
@@ -173,29 +173,7 @@ def settle(
         fmt(-salary_paid), fmt(cash),
     ])
 
-    # ═══════════════════════════════════════════════════════════════
-    # 3. Training cost — cash-sensitive
-    # ═══════════════════════════════════════════════════════════════
-    if eng_hired > 0 and training_per_eng > 0:
-        training_needed = eng_hired * training_per_eng
-        training_paid = min(training_needed, cash)
-        cash -= training_paid
-        effective_hires = int(training_paid // training_per_eng) if training_per_eng > 0 else 0
-        # Reduce effective engineers if training couldn't be paid
-        if effective_hires < eng_hired:
-            shortfall = eng_hired - effective_hires
-            effective_eng -= shortfall
-            eng_hired = effective_hires
-            eng_fired += shortfall
-        cashflow.append([
-            "Training",
-            f"{effective_hires} hired × ¥{training_per_eng:,.0f}",
-            fmt(-training_paid), fmt(cash),
-        ])
-    else:
-        training_paid = 0.0
-
-    total_hr_paid = salary_paid + training_paid
+    total_hr_paid = salary_paid
 
     # ═══════════════════════════════════════════════════════════════
     # 4. Material & Production — cash-sensitive
@@ -322,19 +300,20 @@ def settle(
     if actual_agt_paid > 0:
         cashflow.append(["Agent Cost", "", fmt(-actual_agt_paid), fmt(cash)])
 
-    # Pass 2: allocate sales (single-player → gets all demand, capped by supply)
-    total_demand = sum(demand_by_city.values())
-    for city_name in city_cfgs:
+    # Pass 2: allocate sales — greedy by demand, capped by supply
+    # Sort cities by demand descending to minimize rounding loss
+    city_order = sorted(city_cfgs.keys(), key=lambda c: demand_by_city.get(c, 0), reverse=True)
+    remaining = available
+    for city_name in city_order:
         city_demand = demand_by_city.get(city_name, 0)
-        # Proportional allocation of available products to cities
-        if total_demand > 0:
-            share_of_supply = city_demand / total_demand
+        # Agent gate: zero agents → cannot sell in this city
+        if sales_detail[city_name]["agents_now"] == 0:
+            sold = 0
         else:
-            share_of_supply = 0
-        alloc = int(share_of_supply * available)
-        sold = min(alloc, int(city_demand))
-        sold = max(0, sold)
-        sold = min(sold, available - total_sold)
+            sold = min(int(city_demand), remaining)
+        sold_by_city[city_name] = sold
+        total_sold += sold
+        remaining -= sold
         sold_by_city[city_name] = sold
         total_sold += sold
 
@@ -369,8 +348,9 @@ def settle(
     interest_due = debt * interest_rate
     interest_paid = min(interest_due, cash)
     cash -= interest_paid
-    debt_after = debt + interest_due  # full interest accrues
-    cashflow.append(["Interest", f"{pct(interest_rate)} × ¥{debt:,.0f}", fmt(-interest_paid), fmt(cash)])
+    interest_unpaid = interest_due - interest_paid
+    debt_after = debt + interest_unpaid  # only unpaid interest compounds
+    cashflow.append(["Interest", f"{pct(interest_rate)} × ¥{debt:,.0f} (paid {fmt(interest_paid)}, unpaid {fmt(interest_unpaid)})", fmt(-interest_paid), fmt(cash)])
 
     cash_end = cash
 
@@ -409,7 +389,6 @@ def settle(
             "hours_per_month": hours_per_month,
             "months_per_round": months_per_round,
             "interest_rate": interest_rate,
-            "training_per_eng": training_per_eng,
             "agent_hire": agent_hire,
             "agent_fire": agent_fire,
             "pqi_weight": pqi_weight,
@@ -431,7 +410,6 @@ def settle(
         "eng_fired": eng_fired,
         "eng_salary": eng_salary,
         "salary_paid": salary_paid,
-        "training_paid": training_paid,
         "total_hr_paid": total_hr_paid,
         # Production
         "volume_planned": planned_volume,

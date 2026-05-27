@@ -83,12 +83,10 @@ def render(db_path: Path):
         st.metric("Current", report.get("eng_effective", 0))
     with c5:
         st.metric("Salary/mo", fmt_money(report.get("eng_salary", 0)))
-    c1, c2, c3 = st.columns(3)
+    c1, c2 = st.columns(2)
     with c1:
         st.caption(f"Salary Paid: {fmt_money(report.get('salary_paid', 0))}")
     with c2:
-        st.caption(f"Training Paid: {fmt_money(report.get('training_paid', 0))}")
-    with c3:
         st.caption(f"Total HR Paid: {fmt_money(report.get('total_hr_paid', 0))}")
 
     # Production

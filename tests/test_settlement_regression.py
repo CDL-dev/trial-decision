@@ -155,15 +155,14 @@ def test_cash_sensitive_marketing_capped():
 def test_revenue_flows_to_cash_end():
     """Sales revenue must be added back to cash."""
     config = _jr_config()
-    state = _state(config, cash=500000, engineers=6, engineer_salary=8000)
+    state = _state(config, cash=2000000, engineers=6, engineer_salary=8000)
     fv = _base_fv()
     fv["volume"] = 200
     for city in config.get("cities", []):
         fv[f"{city}_marketing"] = 50000
+        fv[f"{city}_agents"] = 1  # need agents to sell
     result = settle(fv=fv, config=config, state=state, round_index=1)
-    # Revenue should be reflected in cash_end
     assert result["report"]["total_revenue"] > 0
-    # cash_end should be: start + loan - costs + revenue
     assert result["report"]["state"]["cash"] > 0
 
 
@@ -237,3 +236,64 @@ def test_admin_cannot_settle_without_submissions():
         upsert_submission(db_path, mid, 1, 1, {"loan": 0, "engineers_change": 0,
             "engineer_salary": 5000, "quality_investment": 0, "volume": 0, "city_sales": {}})
         assert can_settle_round(db_path, mid, 1)
+
+
+# ── 9. Training removal ──────────────────────────────────────────────
+
+def test_training_cost_mechanism_removed():
+    """Training field in config should not affect effective engineers."""
+    config = _jr_config()
+    config["training_cost_per_engineer"] = 999999  # absurdly high
+    state = _state(config, cash=500000, engineers=0, engineer_salary=8000)
+    fv = _base_fv()
+    fv["engineers"] = 3  # hire 3
+    fv["volume"] = 100
+    result = settle(fv=fv, config=config, state=state, round_index=1)
+    # Engineers should be hired despite high training cost (training removed)
+    assert result["report"]["eng_effective"] == 3
+
+
+def test_total_hr_paid_equals_salary_paid():
+    """After training removal, total HR cost = salary paid only."""
+    config = _jr_config()
+    state = _state(config, cash=500000, engineers=3, engineer_salary=8000)
+    fv = _base_fv()
+    result = settle(fv=fv, config=config, state=state, round_index=1)
+    assert result["report"]["total_hr_paid"] == result["report"]["salary_paid"]
+    assert "training_paid" not in result["report"]
+
+
+def test_paid_interest_does_not_double_increase_debt():
+    """When interest is fully paid, debt should not increase."""
+    config = _jr_config()
+    state = _state(config, cash=500000, debt=100000)
+    fv = _base_fv()
+    result = settle(fv=fv, config=config, state=state, round_index=1)
+    debt_after = result["report"]["debt_after"]
+    # Interest paid in full → debt should not increase
+    assert abs(debt_after - 100000) < 0.01
+
+
+def test_zero_agents_cannot_sell():
+    """Without agents, a city should sell nothing even with demand."""
+    config = _jr_config()
+    state = _state(config, cash=500000, engineers=6, engineer_salary=8000)
+    fv = _base_fv()
+    fv["volume"] = 200
+    fv["Shenzhen_marketing"] = 200000
+    fv["Shenzhen_agents"] = 0  # no agents
+    result = settle(fv=fv, config=config, state=state, round_index=1)
+    assert result["report"]["sold_by_city"]["Shenzhen"] == 0
+
+
+def test_supply_allocation_does_not_drop_last_unit_due_to_rounding():
+    """1 unit of inventory with demand should sell 1, not 0."""
+    config = _jr_config()
+    state = _state(config, cash=500000, products_inventory=1, engineers=6, engineer_salary=8000)
+    fv = _base_fv()
+    fv["volume"] = 0  # no new production, just inventory
+    fv["Shenzhen_marketing"] = 100000
+    fv["Shenzhen_agents"] = 1  # need an agent to sell
+    result = settle(fv=fv, config=config, state=state, round_index=1)
+    # With inventory and demand, at least 1 unit should sell (not 0 from rounding)
+    assert result["report"]["products_sold"] >= 1
