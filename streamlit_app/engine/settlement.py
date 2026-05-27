@@ -119,7 +119,8 @@ def settle(
     months_per_round = float(config.get("months_per_round", 3.0))
     total_engineer_salary = new_engineers * engineer_salary * months_per_round
     total_hr_cost = total_engineer_salary + training_cost
-    cash -= total_hr_cost
+    actual_hr_cost = min(total_hr_cost, cash)
+    cash -= actual_hr_cost
     detail_parts = [f"{new_engineers} eng × ¥{engineer_salary:,.0f}/mo × {months_per_round:.0f}mo"]
     if training_cost > 0:
         detail_parts.append(f"training {engineers_hired} hired ¥{training_cost:,.0f}")
@@ -142,9 +143,10 @@ def settle(
 
     # Material cost based on planned volume (you pay for what you plan, not what you get)
     material_cost_total = volume_planned * material_cost_per_unit
-    cash -= material_cost_total
+    actual_material_cost = min(material_cost_total, cash)
+    cash -= actual_material_cost
 
-    cashflow_rows.append(["Material Cost", f"{volume_planned} units × ¥{material_cost_per_unit:,.0f}", fmt_m(-material_cost_total), fmt_m(cash)])
+    cashflow_rows.append(["Material Cost", f"{volume_planned} units × ¥{material_cost_per_unit:,.0f}", fmt_m(-actual_material_cost), fmt_m(cash)])
 
     # PQI
     old_products = products_inventory
@@ -158,8 +160,10 @@ def settle(
     sales_detail: dict[str, dict] = {}
     total_revenue = 0.0
     total_marketing = 0.0
-    total_agent_hire_cost = 0.0
+    total_agent_cost = 0.0
     total_sold = 0
+    actual_marketing_paid = 0.0
+    actual_agent_cost_paid = 0.0
 
     for city_name, city_cfg in city_cfgs.items():
         agents_delta = int(fv.get(f"{city_name}_agents", 0) or 0)
@@ -175,10 +179,17 @@ def settle(
         agent_cost = 0.0
         if agents_delta > 0:
             agent_cost = agents_delta * agent_hire_price
-            total_agent_hire_cost += agent_cost
         elif agents_delta < 0:
             agent_cost = abs(agents_delta) * agent_fire_price
-            total_agent_hire_cost += agent_cost
+        total_agent_cost += agent_cost
+
+        # Deduct marketing and agent costs — never go below 0
+        mkt_paid = min(marketing, cash)
+        cash -= mkt_paid
+        actual_marketing_paid += mkt_paid
+        agt_paid = min(agent_cost, cash)
+        cash -= agt_paid
+        actual_agent_cost_paid += agt_paid
 
         population = float(city_cfg.get("population", 0))
         penetration = float(city_cfg.get("initial_penetration", 0.02))
@@ -199,14 +210,13 @@ def settle(
         total_marketing += marketing
         market_share_by_city[city_name] = sold / max(market_size, 1)
 
-        # Simplified v4m CPI per city (single-player: no cross-team competition)
-        # CPI = weighted combination of quality, marketing intensity, price positioning
+        # Simplified v4m CPI per city
         cpi_k_pqi = float(config.get("cpi_k_pqi", 0.4))
         cpi_k_mi = float(config.get("cpi_k_mi", 0.3))
         cpi_k_spi = float(config.get("cpi_k_spi", 0.3))
         pqi_norm = min(pqi / max(avg_price, 1), 2.0) if pqi > 0 else 1.0
-        mi_norm = 1.0 + mkt_mult - 1.0  # marketing intensity factor
-        spi_norm = price_mult  # sales price index effect
+        mi_norm = mkt_mult
+        spi_norm = price_mult
         cpi = cpi_k_pqi * pqi_norm + cpi_k_mi * mi_norm + cpi_k_spi * spi_norm
         cpi_by_city[city_name] = round(cpi, 4)
 
@@ -229,29 +239,28 @@ def settle(
             "market_report": bool(market_report),
         }
 
-        cash -= marketing
-        cash -= agent_cost
+    cashflow_rows.append(["Marketing", f"{len(city_cfgs)} cities", fmt_m(-actual_marketing_paid), fmt_m(cash)])
+    if total_agent_cost > 0:
+        cashflow_rows.append(["Agent Cost", "", fmt_m(-actual_agent_cost_paid), fmt_m(cash)])
 
-    cashflow_rows.append(["Marketing", f"{len(city_cfgs)} cities", fmt_m(-total_marketing), fmt_m(cash)])
-    if total_agent_hire_cost > 0:
-        cashflow_rows.append(["Agent Cost", "", fmt_m(-total_agent_hire_cost), fmt_m(cash)])
-
-    total_sales_cost = total_marketing + total_agent_hire_cost
+    total_sales_cost_paid = actual_marketing_paid + actual_agent_cost_paid
 
     # ── 5. Storage ───────────────────────────────────────────────────
     unsold = available_products - total_sold
     storage_cost = unsold * storage_cost_per_unit
-    cash -= storage_cost
-    cashflow_rows.append(["Storage Cost", f"{unsold} unsold × ¥{storage_cost_per_unit:,.0f}", fmt_m(-storage_cost), fmt_m(cash)])
+    actual_storage = min(storage_cost, cash)
+    cash -= actual_storage
+    cashflow_rows.append(["Storage Cost", f"{unsold} unsold × ¥{storage_cost_per_unit:,.0f}", fmt_m(-actual_storage), fmt_m(cash)])
 
     # ── 6. Interest ──────────────────────────────────────────────────
     interest_paid = debt * interest_rate
-    cash -= interest_paid
-    debt_after_interest = debt + interest_paid
-    cashflow_rows.append(["Interest", f"{fmt_pct(interest_rate)} × ¥{debt:,.0f}", fmt_m(-interest_paid), fmt_m(cash)])
+    actual_interest = min(interest_paid, cash)
+    cash -= actual_interest
+    debt_after_interest = debt + interest_paid  # full interest accrues to debt
+    cashflow_rows.append(["Interest", f"{fmt_pct(interest_rate)} × ¥{debt:,.0f}", fmt_m(-actual_interest), fmt_m(cash)])
 
     cash_end = cash
-    total_cost = total_hr_cost + material_cost_total + total_sales_cost + storage_cost + interest_paid
+    total_cost = actual_hr_cost + actual_material_cost + total_sales_cost_paid + actual_storage + actual_interest
     operating_profit = total_revenue - total_cost
 
     # ── Build result ─────────────────────────────────────────────────
@@ -306,9 +315,9 @@ def settle(
         "engineers_fired": engineers_fired,
         "engineers": new_engineers,
         "engineer_salary": engineer_salary,
-        "total_engineer_salary": total_engineer_salary,
+        "total_engineer_salary": actual_hr_cost,
         "training_cost": training_cost,
-        "total_hr_cost": total_hr_cost,
+        "total_hr_cost": actual_hr_cost,
         # Production
         "volume_planned": volume_planned,
         "quality_investment": quality_investment,
@@ -321,17 +330,18 @@ def settle(
         "total_engineer_hours": total_engineer_hours,
         "available_products": available_products,
         "material_cost_per_unit": material_cost_per_unit,
-        "material_cost_total": material_cost_total,
+        "material_cost_total": actual_material_cost,
         "storage_cost_per_unit": storage_cost_per_unit,
         "products_inventory_after": unsold,
-        "storage_cost": storage_cost,
+        "storage_cost": actual_storage,
         "pqi": round(pqi, 2),
         # Sales
         "products_sold": total_sold,
         "total_revenue": total_revenue,
-        "total_marketing": total_marketing,
-        "total_agent_cost": total_agent_hire_cost,
-        "total_sales_cost": total_sales_cost,
+        "total_marketing": actual_marketing_paid,
+        "total_agent_cost": actual_agent_cost_paid,
+        "total_sales_cost": total_sales_cost_paid,
+        "total_interest_paid": actual_interest,
         "sold_by_city": sold_by_city,
         "revenue_by_city": revenue_by_city,
         "market_share_by_city": market_share_by_city,
