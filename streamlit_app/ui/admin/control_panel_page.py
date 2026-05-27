@@ -73,31 +73,30 @@ def render(db_path: Path):
     can_settle = can_settle_round(db_path, match_id, current_round)
     if not can_settle:
         st.info("Waiting for at least one submission before settlement.")
-        return
+    else:
+        if st.button("Execute Settlement", type="primary"):
+            with st.spinner("Settling round..."):
+                settle_current_round(db_path, match_id)
+            st.success(f"Round {current_round} settled!")
+            st.rerun()
 
-    if st.button("Execute Settlement", type="primary"):
-        with st.spinner("Settling round..."):
-            settle_current_round(db_path, match_id)
-        st.success(f"Round {current_round} settled!")
-        st.rerun()
+        # Show last round summary if available
+        if current_round > 1:
+            st.divider()
+            st.subheader(f"Round {current_round - 1} Summary")
+            conn = __import__("sqlite3").connect(db_path)
+            conn.row_factory = __import__("sqlite3").Row
+            results = conn.execute(
+                "SELECT rr.*, p.company_name FROM round_results rr JOIN players p ON p.id = rr.player_id "
+                "WHERE rr.match_id = ? AND rr.round_index = ?",
+                (match_id, current_round - 1),
+            ).fetchall()
+            conn.close()
 
-    # Show last round summary if available
-    if current_round > 1:
-        st.divider()
-        st.subheader(f"Round {current_round - 1} Summary")
-        conn = __import__("sqlite3").connect(db_path)
-        conn.row_factory = __import__("sqlite3").Row
-        results = conn.execute(
-            "SELECT rr.*, p.company_name FROM round_results rr JOIN players p ON p.id = rr.player_id "
-            "WHERE rr.match_id = ? AND rr.round_index = ?",
-            (match_id, current_round - 1),
-        ).fetchall()
-        conn.close()
-
-        for r in results:
-            summary = json.loads(r["summary_json"])
-            with st.expander(f"Player {r['company_name']}"):
-                st.json(summary)
+            for r in results:
+                summary = json.loads(r["summary_json"])
+                with st.expander(f"Player {r['company_name']}"):
+                    st.json(summary)
 
     # Danger zone: delete match
     st.divider()
