@@ -138,13 +138,11 @@ def test_settle_round_has_no_tax_fields():
     result = settle_round(submission, config, None, 1, 4, "Shenzhen")
 
     report = result["report"]
-    cashflow = report.get("cashflow", {})
 
     assert "tax" not in report
     assert "profit_before_tax" not in report
-    assert "capital_after_tax" not in cashflow
-    assert "capital_end" in cashflow
     assert "operating_profit" in report
+    assert "cashflow_table" in report
 
 
 def test_settle_round_zero_price_falls_back_to_city_avg():

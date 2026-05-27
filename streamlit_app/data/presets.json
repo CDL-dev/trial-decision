@@ -51,7 +51,7 @@
     "has_workers_mechanism": false,
     "has_management_mechanism": false,
     "max_teams_per_city": 0,
-    "cpi_sales_model": "classic",
+    "cpi_sales_model": "v4m",
     "home_city_cpi_multiplier": 1.1,
     "cities": [
       "Shenzhen",
@@ -199,7 +199,7 @@
     "has_workers_mechanism": false,
     "has_management_mechanism": false,
     "max_teams_per_city": 0,
-    "cpi_sales_model": "adaptive_v2",
+    "cpi_sales_model": "v4m",
     "cpi_use_cross_team_avg_price": false,
     "cpi_use_cross_team_avg_salary": false,
     "cpi_price_target_mode": "price_max_pct",
