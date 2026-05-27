@@ -26,8 +26,20 @@ def get_default_setup_form() -> dict:
 def render(db_path: Path):
     st.header("Create Match")
 
-    if has_active_match(db_path):
+    if has_active_match(db_path) and "created_players" not in st.session_state:
         st.warning("An active match already exists. End it before creating a new one.")
+        return
+
+    created_players = st.session_state.get("created_players")
+    if created_players:
+        st.success("Match created!")
+        st.subheader("Player Credentials")
+        for p in created_players:
+            st.code(f"Player {p['player_no']} — Password: {p['password']}", language=None)
+        st.info("Copy these passwords now. Share them with players before they log in.")
+        if st.button("Go to Setup Confirm"):
+            del st.session_state["created_players"]
+            st.rerun()
         return
 
     with st.form("create_match_form"):
@@ -56,9 +68,5 @@ def render(db_path: Path):
             players = create_players(db_path, match_id, player_count, list(config.get("cities", [])))
             create_cities(db_path, match_id, config)
 
-            st.success(f"Match created! (id={match_id})")
-            st.subheader("Player Credentials")
-            for p in players:
-                st.text(f"Player {p['player_no']} — Password: {p['password']}")
-            st.info("Share these passwords with players. Save them now.")
+            st.session_state["created_players"] = players
             st.rerun()

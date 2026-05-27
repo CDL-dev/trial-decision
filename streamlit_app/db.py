@@ -28,6 +28,7 @@ def bootstrap_db(db_path: Path) -> None:
                 match_id INTEGER NOT NULL,
                 player_no INTEGER NOT NULL,
                 password_hash TEXT NOT NULL,
+                password_plain TEXT NOT NULL DEFAULT '',
                 company_name TEXT NOT NULL,
                 home_city TEXT NOT NULL,
                 setup_completed INTEGER NOT NULL,

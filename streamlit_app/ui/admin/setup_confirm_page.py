@@ -30,6 +30,14 @@ def render(db_path: Path):
     if st.button("Refresh Status"):
         st.rerun()
 
+    st.divider()
+    st.subheader("Player Credentials")
+    for p in players:
+        password = p.get("password_plain", "")
+        st.code(f"Player {p['player_no']} — Password: {password}", language=None)
+
+    st.divider()
+    st.subheader("Setup Status")
     for p in players:
         icon = "✅" if p["setup_completed"] else "⬜"
         st.text(f"{icon} Player {p['player_no']}: {p['company_name'] or '(not set)'} — {p['home_city'] or '(no city)'}")

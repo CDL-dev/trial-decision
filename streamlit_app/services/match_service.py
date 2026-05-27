@@ -80,10 +80,10 @@ def create_players(db_path: Path, match_id: int, player_count: int, cities: list
             password_hash = hashlib.sha256(password.encode()).hexdigest()
             cur = conn.execute(
                 """
-                INSERT INTO players (match_id, player_no, password_hash, company_name, home_city, setup_completed, is_active)
-                VALUES (?, ?, ?, '', '', 0, 1)
+                INSERT INTO players (match_id, player_no, password_hash, password_plain, company_name, home_city, setup_completed, is_active)
+                VALUES (?, ?, ?, ?, '', '', 0, 1)
                 """,
-                (match_id, i, password_hash),
+                (match_id, i, password_hash, password),
             )
             players.append({"id": int(cur.lastrowid), "player_no": i, "password": password})
         conn.commit()

@@ -10,8 +10,8 @@ from streamlit_app.services.player_service import upsert_player_setup
 def _seed_player(db_path: Path, player_id: int = 1):
     conn = sqlite3.connect(db_path)
     conn.execute(
-        "INSERT INTO players (match_id, player_no, password_hash, company_name, home_city, setup_completed, is_active) "
-        "VALUES (1, ?, 'hash', '', '', 0, 1)",
+        "INSERT INTO players (match_id, player_no, password_hash, password_plain, company_name, home_city, setup_completed, is_active) "
+        "VALUES (1, ?, 'hash', '', '', '', 0, 1)",
         (player_id,),
     )
     conn.commit()
