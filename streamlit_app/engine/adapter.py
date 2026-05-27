@@ -1,38 +1,28 @@
-"""Settlement engine adapter — bridges trial submissions into the sim_clone settlement engine."""
+"""Settlement engine adapter — bridges trial submissions into the settlement engine."""
 
 import copy
 import json
-import os
+from pathlib import Path
 
 from streamlit_app.engine.copied.decision_submit import run_decision_round
 from streamlit_app.trial_schema import normalize_trial_submission
 
-_PRESETS_PATH = os.path.join(
-    os.path.dirname(__file__),  # streamlit_app/engine/
-    "..", "..", "..", "sim_clone", "presets.json",
-)
-_CITY_PRESETS_PATH = os.path.join(
-    os.path.dirname(__file__),
-    "..", "..", "..", "sim_clone", "city_presets.json",
-)
+_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+_PRESETS_PATH = _DATA_DIR / "presets.json"
+_CITY_PRESETS_PATH = _DATA_DIR / "city_presets.json"
 
 
 def _load_config(preset_key: str = "JR") -> dict:
-    """Load CONFIG from sim_clone preset files."""
-    presets_path = os.path.abspath(_PRESETS_PATH)
-    city_presets_path = os.path.abspath(_CITY_PRESETS_PATH)
-
-    with open(presets_path, encoding="utf-8") as f:
+    """Load CONFIG from the bundled preset data files."""
+    with open(_PRESETS_PATH, encoding="utf-8") as f:
         presets = json.load(f)
     cfg = copy.deepcopy(presets[preset_key])
 
-    city_presets_path_abs = os.path.abspath(city_presets_path)
-    if os.path.isfile(city_presets_path_abs):
-        with open(city_presets_path_abs, encoding="utf-8") as f:
+    if _CITY_PRESETS_PATH.is_file():
+        with open(_CITY_PRESETS_PATH, encoding="utf-8") as f:
             city_presets = json.load(f)
-        # Match city_presets entry by city names if possible
         cities = cfg.get("cities") or []
-        for preset_name, preset_cities in city_presets.items():
+        for _preset_name, preset_cities in city_presets.items():
             preset_names = {pc.get("name") for pc in preset_cities if pc.get("name")}
             if preset_names == set(cities):
                 cfg["cities_config"] = copy.deepcopy(preset_cities)
@@ -73,7 +63,7 @@ def _build_game_state(config: dict, round_index: int) -> dict:
 
 def settle_round(
     submission: dict,
-    config: dict,
+    config: dict | None = None,
     state: dict | None = None,
     round_index: int = 1,
     total_rounds: int = 4,
@@ -85,8 +75,8 @@ def settle_round(
     ----------
     submission : dict
         Trial submission from the player (raw, pre-normalization).
-    config : dict
-        Match CONFIG loaded from sim_clone presets (see ``load_config``).
+    config : dict or None
+        Match CONFIG. If None, loads the default "JR" preset from bundled data.
     state : dict or None
         Current player state from a previous round, or None for round 1.
     round_index : int
@@ -99,28 +89,26 @@ def settle_round(
     Returns
     -------
     dict with keys:
-        summary      — round summary (total_assets, debt, net_assets)
-        report       — full settlement result dict from the engine
-        city_results — per-city allocation debug info
-        ranking_snapshot — ranking/positioning info
-        new_state    — updated player state for the next round
+        summary           — round summary (round, total_assets, debt, net_assets)
+        report            — full settlement result dict from the engine
+        city_results      — per-city sales, revenue, market share, CPI/price indices
+        ranking_snapshot  — valuation and debt for ranking
+        new_state         — updated player state for the next round
     """
-    # --- Normalize submission to engine field-value dict ---
+    if config is None:
+        config = _load_config()
+
     fv = normalize_trial_submission(submission)
 
-    # --- Build or reuse player state ---
     if state is None:
         state = _build_initial_state(config)
     else:
-        state = dict(state)  # defensive copy
+        state = dict(state)
 
-    # --- Build GAME_STATE ---
     game_state = _build_game_state(config, round_index)
 
-    # --- Rounding helper ---
     _round1 = lambda x: round(x, 5)
 
-    # --- Game context callback ---
     def _get_game_context():
         return {
             "status": "running",
@@ -128,14 +116,12 @@ def settle_round(
             "total_rounds": total_rounds,
         }
 
-    # --- Result capture (save_round_to_disk callback) ---
     captured = {}
 
     def save_round_to_disk(round_number, result, team_id_key):
         captured["round_number"] = round_number
         captured["result"] = result
 
-    # --- Run the settlement engine ---
     run_decision_round(
         CONFIG=config,
         GAME_STATE=game_state,
@@ -151,7 +137,6 @@ def settle_round(
         cross_team_overrides=None,
     )
 
-    # --- Extract structured output from captured result ---
     result = captured.get("result", {})
 
     summary = result.get("cashflow", {}).copy()
@@ -159,8 +144,10 @@ def settle_round(
         "round": result.get("state", {}).get("round", round_index) - 1,
         "total_assets": result.get("cashflow", {}).get("capital_after_tax", 0.0),
         "debt": result.get("debt_after_interest", 0.0),
-        "net_assets": result.get("cashflow", {}).get("capital_after_tax", 0.0)
-                      - result.get("debt_after_interest", 0.0),
+        "net_assets": (
+            result.get("cashflow", {}).get("capital_after_tax", 0.0)
+            - result.get("debt_after_interest", 0.0)
+        ),
     })
 
     new_state = result.get("state", state)

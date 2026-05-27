@@ -1,4 +1,4 @@
-"""Load source preset files from sim_clone for the trial app."""
+"""Load built-in preset files bundled with the Streamlit trial app."""
 
 from __future__ import annotations
 
