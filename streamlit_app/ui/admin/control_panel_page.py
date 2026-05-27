@@ -11,6 +11,7 @@ from streamlit_app.services.current_match_service import get_current_match
 from streamlit_app.services.player_service import list_players, get_player_state
 from streamlit_app.services.submission_service import upsert_submission
 from streamlit_app.services.settlement_service import settle_current_round
+from streamlit_app.services.match_service import delete_match
 from streamlit_app.ui.shared.key_data import render_key_data
 
 
@@ -97,3 +98,13 @@ def render(db_path: Path):
             summary = json.loads(r["summary_json"])
             with st.expander(f"Player {r['company_name']}"):
                 st.json(summary)
+
+    # Danger zone: delete match
+    st.divider()
+    with st.expander("Danger Zone", expanded=False):
+        st.warning("Deleting this match will remove all players, submissions, and results.")
+        confirmed = st.checkbox("I confirm I want to delete this match and all its data")
+        if st.button("Delete Match", type="secondary", disabled=not confirmed):
+            delete_match(db_path, match_id)
+            st.success("Match deleted. Create a new match to continue.")
+            st.rerun()

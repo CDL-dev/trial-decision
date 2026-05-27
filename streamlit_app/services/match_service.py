@@ -70,6 +70,22 @@ def end_match(db_path: Path, match_id: int) -> None:
         conn.close()
 
 
+def delete_match(db_path: Path, match_id: int) -> None:
+    """Delete a match and all related data (cascade)."""
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        for table in (
+            "round_city_results", "round_results", "round_overrides",
+            "round_submissions", "cities", "players",
+        ):
+            conn.execute(f"DELETE FROM {table} WHERE match_id = ?", (match_id,))
+        conn.execute("DELETE FROM matches WHERE id = ?", (match_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def create_players(db_path: Path, match_id: int, player_count: int, cities: list[str]) -> list[dict]:
     """Create player slots with random passwords. Returns list of {player_no, password}."""
     conn = sqlite3.connect(db_path)
