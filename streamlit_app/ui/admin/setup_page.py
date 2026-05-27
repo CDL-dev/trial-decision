@@ -10,6 +10,7 @@ import streamlit as st
 from streamlit_app.engine.adapter import load_config
 from streamlit_app.services.current_match_service import has_active_match
 from streamlit_app.services.match_service import create_match, create_players, create_cities
+from streamlit_app.ui.shared.key_data import render_key_data
 
 
 def get_default_setup_form() -> dict:
@@ -42,20 +43,22 @@ def render(db_path: Path):
             st.rerun()
         return
 
+    # Preset selector outside form so Key Data can react
+    preset_key = st.selectbox("Preset", ["JR", "111516", "OBOS"], key="setup_preset")
+
+    # Key Data drawer in sidebar
+    with st.sidebar:
+        with st.expander("Key Data — Game Parameters", expanded=False):
+            try:
+                config_preview = load_config(preset_key)
+                render_key_data(config_preview)
+            except Exception:
+                st.warning("Could not load preset data.")
+
     with st.form("create_match_form"):
         name = st.text_input("Match Name", value="Trial Match")
         player_count = st.selectbox("Players", [1, 2, 3], index=2)
         round_count = st.number_input("Rounds", min_value=2, max_value=10, value=4)
-        preset_key = st.selectbox("Preset", ["JR", "111516", "OBOS"])
-
-        st.markdown("**Mechanisms (trial mode)**")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.checkbox("Workers", value=False, disabled=True)
-            st.checkbox("Management", value=False, disabled=True)
-        with col2:
-            st.checkbox("Patent", value=False, disabled=True)
-            st.checkbox("Engineers", value=True, disabled=True)
 
         submitted = st.form_submit_button("Create Match")
 
