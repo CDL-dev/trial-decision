@@ -39,6 +39,30 @@ def build_production_rows(report: dict) -> list[dict]:
     ]
 
 
+def build_market_report_sections(report: dict) -> list[dict]:
+    """Build ordered market report sections for display."""
+    sections = []
+    market_report_by_city = report.get("market_report_by_city", {}) or {}
+    for city_name in sorted(market_report_by_city.keys()):
+        city_report = market_report_by_city.get(city_name) or {}
+        if not city_report.get("ordered"):
+            continue
+        rows = []
+        for row in city_report.get("teams", []) or []:
+            rows.append({
+                "Company": row.get("company_name", ""),
+                "Price": fmt_money(row.get("price", 0)),
+                "Agents": row.get("agents", 0),
+                "Marketing": fmt_money(row.get("marketing", 0)),
+                "PQI": f"{float(row.get('pqi', 0) or 0):,.2f}",
+                "Sold": row.get("sold", 0),
+                "Revenue": fmt_money(row.get("revenue", 0)),
+                "Market Share": fmt_pct(row.get("market_share", 0)),
+            })
+        sections.append({"city": city_name, "rows": rows})
+    return sections
+
+
 def render_report_content(
     *,
     summary: dict,
@@ -111,6 +135,14 @@ def render_report_content(
         })
     if sales_rows:
         st.dataframe(sales_rows, width="stretch", hide_index=True)
+
+    market_report_sections = build_market_report_sections(report)
+    if market_report_sections:
+        st.divider()
+        st.subheader("Market Report")
+        for section in market_report_sections:
+            st.markdown(f"**{section['city']}**")
+            st.dataframe(section["rows"], width="stretch", hide_index=True)
 
     if show_navigation:
         st.divider()

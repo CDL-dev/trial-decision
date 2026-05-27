@@ -6,6 +6,7 @@ from streamlit_app.ui.player.decision_page import (
 )
 from streamlit_app.ui.player.report_page import (
     build_cashflow_table_rows,
+    build_market_report_sections,
     build_production_rows,
 )
 
@@ -63,3 +64,51 @@ def test_build_cashflow_table_rows_preserves_trial_report_columns():
             "Cash Balance": "CNY 200.00",
         }
     ]
+
+
+def test_build_market_report_sections_only_keeps_ordered_cities():
+    """Market report display should only include cities the player ordered."""
+    report = {
+        "market_report_by_city": {
+            "Shanghai": {
+                "ordered": True,
+                "teams": [
+                    {
+                        "company_name": "Alpha",
+                        "price": 16000,
+                        "agents": 2,
+                        "marketing": 120000,
+                        "pqi": 35.1639,
+                        "sold": 55,
+                        "revenue": 880000,
+                        "market_share": 0.11,
+                    }
+                ],
+            },
+            "Guangzhou": {
+                "ordered": False,
+                "teams": [
+                    {
+                        "company_name": "Beta",
+                        "price": 17000,
+                        "agents": 1,
+                        "marketing": 90000,
+                        "pqi": 20.0,
+                        "sold": 22,
+                        "revenue": 374000,
+                        "market_share": 0.04,
+                    }
+                ],
+            },
+        }
+    }
+
+    sections = build_market_report_sections(report)
+
+    assert [section["city"] for section in sections] == ["Shanghai"]
+    row = sections[0]["rows"][0]
+    assert row["Company"] == "Alpha"
+    assert row["Agents"] == 2
+    assert row["PQI"] == "35.16"
+    assert row["Sold"] == 55
+    assert row["Market Share"] == "11.0%"

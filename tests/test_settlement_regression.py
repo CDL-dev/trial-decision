@@ -7,7 +7,7 @@ from pathlib import Path
 
 from streamlit_app.db import bootstrap_db
 from streamlit_app.engine.adapter import load_config
-from streamlit_app.engine.settlement import allocate_trial_v4m, settle, settle_player_phase1
+from streamlit_app.engine.settlement import allocate_trial_v4m, settle, settle_player_phase1, settle_player_phase2
 from streamlit_app.services.match_service import create_match, create_players, create_cities, start_match
 from streamlit_app.services.settlement_service import settle_current_round
 from streamlit_app.services.submission_service import can_settle_round
@@ -201,6 +201,57 @@ def test_revenue_flows_to_cash_end():
     result = settle(fv=fv, config=config, state=state, round_index=1)
     assert result["report"]["total_revenue"] > 0
     assert result["report"]["state"]["cash"] > 0
+
+
+def test_market_report_snapshot_is_saved_for_ordered_city_only():
+    """Ordered market reports should produce a per-city all-team snapshot in the report."""
+    config = _jr_config()
+    state = _state(config, cash=3_000_000, engineers=6, engineer_salary=8000)
+
+    fv_a = _base_fv()
+    fv_a["volume"] = 200
+    fv_a["Shenzhen_agents"] = 1
+    fv_a["Shenzhen_marketing"] = 100000
+    fv_a["Shenzhen_price"] = 4400
+    fv_a["Shenzhen_market_report"] = 1
+    fv_a["quality_investment"] = 100000
+
+    fv_b = _base_fv()
+    fv_b["volume"] = 200
+    fv_b["Shenzhen_agents"] = 1
+    fv_b["Shenzhen_marketing"] = 80000
+    fv_b["Shenzhen_price"] = 4300
+    fv_b["quality_investment"] = 50000
+
+    team_a = settle_player_phase1(fv=fv_a, config=config, state=dict(state), round_index=1, player_home_city="Shenzhen")
+    team_a["player_id"] = 1
+    team_a["company_name"] = "Alpha"
+    team_a["player_no"] = 1
+    team_b = settle_player_phase1(fv=fv_b, config=config, state=dict(state), round_index=1, player_home_city="Shenzhen")
+    team_b["player_id"] = 2
+    team_b["company_name"] = "Beta"
+    team_b["player_no"] = 2
+
+    allocate_trial_v4m([team_a, team_b], config)
+
+    result = settle_player_phase2(
+        phase1=team_a,
+        sold=int(team_a.get("total_sold_allocated", 0)),
+        total_revenue=float(sum(team_a.get("revenue_by_city", {}).values())),
+        config=config,
+    )
+
+    market_report = result["report"]["market_report_by_city"]
+
+    assert "Shenzhen" in market_report
+    assert market_report["Shenzhen"]["ordered"] is True
+    assert len(market_report["Shenzhen"]["teams"]) == 2
+    assert market_report["Chongqing"]["ordered"] is False
+    assert market_report["Shenzhen"]["teams"][0]["company_name"] == "Alpha"
+    assert set(market_report["Shenzhen"]["teams"][0]) == {
+        "company_name", "price", "agents", "marketing", "pqi", "sold", "revenue", "market_share",
+    }
+    assert market_report["Shenzhen"]["teams"][0]["pqi"] > 0
 
 
 # ── 6. v4m-lite ──────────────────────────────────────────────────────

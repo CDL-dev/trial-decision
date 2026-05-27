@@ -290,6 +290,37 @@ def _largest_remainder_scale(city_values: dict[str, int], target_total: int) -> 
     return floored
 
 
+def _build_market_report_snapshot(team_states: list[dict], cities_config: list[dict]) -> dict[int, dict[str, dict]]:
+    """Build per-team market report snapshot rows for ordered city reports."""
+    city_names = [c.get("name") for c in cities_config if c.get("name")]
+    snapshots: dict[int, dict[str, dict]] = {}
+    for team in team_states:
+        player_id = int(team["player_id"])
+        ordered_flags = team.get("market_report_flags", {})
+        city_map: dict[str, dict] = {}
+        for city_name in city_names:
+            rows: list[dict] = []
+            for peer in team_states:
+                peer_sales = peer.get("sales_prep", {}).get(city_name, {})
+                rows.append({
+                    "company_name": peer.get("company_name") or f"Player {peer.get('player_no', peer.get('player_id'))}",
+                    "price": float(peer_sales.get("price", 0.0) or 0.0),
+                    "agents": int(peer_sales.get("agents_now", 0) or 0),
+                    "marketing": float(peer_sales.get("marketing_paid", 0.0) or 0.0),
+                    "pqi": float(peer.get("pqi", 0.0) or 0.0),
+                    "sold": int(peer.get("sold_by_city", {}).get(city_name, 0) or 0),
+                    "revenue": float(peer.get("revenue_by_city", {}).get(city_name, 0.0) or 0.0),
+                    "market_share": float(peer.get("market_share_by_city", {}).get(city_name, 0.0) or 0.0),
+                })
+            rows.sort(key=lambda row: str(row["company_name"]))
+            city_map[city_name] = {
+                "ordered": bool(ordered_flags.get(city_name, False)),
+                "teams": rows,
+            }
+        snapshots[player_id] = city_map
+    return snapshots
+
+
 def _allocate_single_team_like_main(team: dict, config: dict, cities_config: list[dict]) -> None:
     """Use the main project's single-team CPI sales path for trial solo settlement."""
     city_names = [c.get("name") for c in cities_config if c.get("name")]
@@ -429,6 +460,15 @@ def allocate_trial_v4m(team_states: list[dict], config: dict) -> list[dict]:
             for city in city_names
         }
         team["total_sold_allocated"] = int(sum(team["sold_by_city"].values()))
+        team["market_share_by_city"] = {}
+        for city in city_names:
+            market_size = float(team.get("sales_prep", {}).get(city, {}).get("market_size", 0.0) or 0.0)
+            sold = float(team["sold_by_city"].get(city, 0) or 0.0)
+            team["market_share_by_city"][city] = (sold / market_size) if market_size > 0 else 0.0
+
+    snapshots = _build_market_report_snapshot(team_states, cities_config)
+    for team in team_states:
+        team["market_report_by_city"] = snapshots.get(int(team["player_id"]), {})
     return team_states
 
 
@@ -570,9 +610,12 @@ def settle_player_phase1(
     price_by_city: dict[str, float] = {}
     requested_agents_by_city: dict[str, int] = {}
     planned_marketing_by_city: dict[str, float] = {}
+    market_report_requested_by_city: dict[str, bool] = {}
     sales_prep: dict[str, dict] = {}
     total_agent_change_est = 0.0
     total_marketing_planned = 0.0
+    market_report_price = max(0.0, float(config.get("market_report_price") or 0.0))
+    total_market_report_planned = 0.0
     for city_name, city_cfg in city_cfgs.items():
         pop = float(city_cfg.get("population", 0))
         pen = float(city_cfg.get("initial_penetration", 0.02))
@@ -582,6 +625,7 @@ def settle_player_phase1(
         if agent_delta > 3:
             agent_delta = 3
         marketing_planned = float(fv.get(f"{city_name}_marketing", 0) or 0)
+        market_report_requested = bool(int(fv.get(f"{city_name}_market_report", 0) or 0))
         raw_price = float(fv.get(f"{city_name}_price", 0) or 0)
         price = raw_price if raw_price > 0 else avg_price
         price_min = float(config.get("product_price_min") or 0.0)
@@ -594,11 +638,14 @@ def settle_player_phase1(
         competitive_agents = max(0, prev_agents + agent_delta)
         requested_agents_by_city[city_name] = agent_delta
         planned_marketing_by_city[city_name] = marketing_planned
+        market_report_requested_by_city[city_name] = market_report_requested
         if agent_delta > 0:
             total_agent_change_est += agent_delta * agent_hire
         elif agent_delta < 0:
             total_agent_change_est += abs(agent_delta) * agent_fire
         total_marketing_planned += max(0.0, marketing_planned)
+        if market_report_requested:
+            total_market_report_planned += market_report_price
         price_by_city[city_name] = price
         sales_prep[city_name] = {
             "agents_prev": prev_agents,
@@ -612,6 +659,8 @@ def settle_player_phase1(
             "price": price,
             "avg_price": avg_price,
             "market_size": market_size,
+            "market_report_requested": market_report_requested,
+            "market_report_paid": False,
         }
 
     agent_budget = min(total_agent_change_est, cash)
@@ -666,6 +715,16 @@ def settle_player_phase1(
     if agent_paid_total > 0:
         cashflow.append(["Agent Cost", "", fmt(-agent_paid_total), fmt(cash)])
 
+    market_report_paid_total = 0.0
+    if market_report_price > 0 and total_market_report_planned > 0:
+        ordered_cities = [city for city, ordered in market_report_requested_by_city.items() if ordered]
+        affordable_count = min(len(ordered_cities), int(cash // market_report_price))
+        for city_name in ordered_cities[:affordable_count]:
+            sales_prep[city_name]["market_report_paid"] = True
+        market_report_paid_total = affordable_count * market_report_price
+        cash -= market_report_paid_total
+        cashflow.append(["Market Report", "", fmt(-market_report_paid_total), fmt(cash)])
+
     quality_paid = min(q_planned, cash)
     cash -= quality_paid
     if quality_paid > 0:
@@ -706,6 +765,11 @@ def settle_player_phase1(
         "base_cpi_by_city": {city: 0.0 for city in city_cfgs},
         "price_by_city": price_by_city,
         "sales_prep": sales_prep,
+        "market_report_flags": {
+            city_name: bool(sales_prep[city_name].get("market_report_paid"))
+            for city_name in city_cfgs
+        },
+        "market_report_paid_total": market_report_paid_total,
         "cashflow": cashflow,
         "round_index": round_index,
         "mat_per_unit": mat_per_unit,
@@ -752,6 +816,7 @@ def settle_player_phase2(*, phase1: dict, sold: int, total_revenue: float, confi
         + phase1["m_paid"]
         + storage_paid
         + interest_paid
+        + float(phase1.get("market_report_paid_total", 0.0) or 0.0)
         + sum(phase1.get("sales_prep", {}).get(city, {}).get("marketing_paid", 0) for city in phase1.get("sales_prep", {}))
         + sum(phase1.get("sales_prep", {}).get(city, {}).get("agent_cost", 0) for city in phase1.get("sales_prep", {}))
     )
@@ -759,10 +824,7 @@ def settle_player_phase2(*, phase1: dict, sold: int, total_revenue: float, confi
 
     sold_by_city = dict(phase1.get("sold_by_city", {}))
     revenue_by_city = dict(phase1.get("revenue_by_city", {}))
-    share_by_city: dict[str, float] = {}
-    for city in sold_by_city:
-        market_size = phase1.get("sales_prep", {}).get(city, {}).get("market_size", 1)
-        share_by_city[city] = sold_by_city[city] / max(market_size, 1)
+    share_by_city: dict[str, float] = dict(phase1.get("market_share_by_city", {}))
 
     new_state = {
         "round": phase1["round_index"] + 1,
@@ -784,6 +846,7 @@ def settle_player_phase2(*, phase1: dict, sold: int, total_revenue: float, confi
     }
     marketing_paid_total = sum(phase1.get("sales_prep", {}).get(city, {}).get("marketing_paid", 0) for city in phase1.get("sales_prep", {}))
     agent_cost_total = sum(phase1.get("sales_prep", {}).get(city, {}).get("agent_cost", 0) for city in phase1.get("sales_prep", {}))
+    market_report_paid_total = float(phase1.get("market_report_paid_total", 0.0) or 0.0)
     cashflow_summary = _build_cashflow_summary(
         cash_start=phase1["cash_start"],
         debt_start=debt,
@@ -843,11 +906,13 @@ def settle_player_phase2(*, phase1: dict, sold: int, total_revenue: float, confi
         "revenue_by_city": revenue_by_city,
         "market_share_by_city": share_by_city,
         "cpi_by_city": dict(phase1.get("cpi_by_city", {})),
+        "market_report_by_city": dict(phase1.get("market_report_by_city", {})),
         "sales_detail_by_city": phase1.get("sales_prep", {}),
         "total_cost_paid": total_cost,
         "operating_profit": operating_profit,
-        "marketing_paid": 0,
-        "agent_cost_paid": 0,
+        "marketing_paid": marketing_paid_total,
+        "agent_cost_paid": agent_cost_total,
+        "market_report_paid": market_report_paid_total,
         "total_sales_cost": 0,
     }
     for city in phase1.get("sales_prep", {}):
