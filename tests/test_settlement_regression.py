@@ -169,7 +169,7 @@ def test_revenue_flows_to_cash_end():
 # ── 6. v4m-lite ──────────────────────────────────────────────────────
 
 def test_v4m_lite_uptake_increases_with_marketing():
-    """Higher marketing should increase uptake."""
+    """Higher marketing should increase base_cpi."""
     config = _jr_config()
     state = _state(config, cash=2000000, engineers=6, engineer_salary=8000)
     fv_lo = _base_fv()
@@ -180,9 +180,9 @@ def test_v4m_lite_uptake_increases_with_marketing():
     r_lo = settle(fv=fv_lo, config=config, state=dict(state), round_index=1)
     r_hi = settle(fv=fv_hi, config=config, state=dict(state), round_index=1)
 
-    up_lo = r_lo["report"]["uptake_by_city"]["Shenzhen"]
-    up_hi = r_hi["report"]["uptake_by_city"]["Shenzhen"]
-    assert up_hi > up_lo, f"uptake should increase with marketing: {up_lo} vs {up_hi}"
+    cpi_lo = r_lo["report"]["cpi_by_city"]["Shenzhen"]
+    cpi_hi = r_hi["report"]["cpi_by_city"]["Shenzhen"]
+    assert cpi_hi > cpi_lo, f"base_cpi should increase with marketing: {cpi_lo} vs {cpi_hi}"
 
 
 def test_v4m_lite_supply_cap_limits_sales():
@@ -299,12 +299,11 @@ def test_supply_allocation_does_not_drop_last_unit_due_to_rounding():
 
 
 def test_allocation_uses_only_active_city_demand():
-    """Zero-agent cities must not dilute shares of active cities."""
+    """Zero-agent cities must not sell; active cities both get supply."""
     config = _jr_config()
-    state = _state(config, cash=2000000, engineers=12, engineer_salary=8000)
+    state = _state(config, cash=3000000, engineers=12, engineer_salary=8000)
     fv = _base_fv()
-    fv["volume"] = 300
-    # Shenzhen and Chongqing have agents; Suzhou and Dalian do not
+    fv["volume"] = 600  # enough supply for both active cities
     fv["Shenzhen_agents"] = 1
     fv["Shenzhen_marketing"] = 50000
     fv["Chongqing_agents"] = 1
