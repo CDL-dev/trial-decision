@@ -69,7 +69,8 @@ def render(db_path: Path):
             st.caption(f"Max loan: {fmt_money(max_loan)}")
             loan = st.number_input("Loan", min_value=0, max_value=int(max_loan) if max_loan > 0 else None, value=0, step=100000)
             engineers_change = st.number_input("Engineers Change", value=0)
-            engineer_salary = st.number_input("Engineer Salary", min_value=0, value=5000, step=500)
+            salary_min = int(config.get("engineer_salary_min", 1000))
+            engineer_salary = st.number_input("Engineer Salary", min_value=salary_min, value=5000, step=500)
         with col2:
             quality_investment = st.number_input("Quality Investment", min_value=0, value=0, step=10000)
             volume = st.number_input("Production Volume", min_value=0, value=100, step=100)

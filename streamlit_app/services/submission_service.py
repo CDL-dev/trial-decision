@@ -6,6 +6,24 @@ import json
 import sqlite3
 from pathlib import Path
 
+
+def count_current_round_submissions(db_path: Path, match_id: int, round_index: int) -> int:
+    """Return the number of submissions for a given round."""
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM round_submissions WHERE match_id = ? AND round_index = ?",
+            (match_id, round_index),
+        ).fetchone()
+        return int(row[0]) if row else 0
+    finally:
+        conn.close()
+
+
+def can_settle_round(db_path: Path, match_id: int, round_index: int) -> bool:
+    """True if at least one player has submitted for the current round."""
+    return count_current_round_submissions(db_path, match_id, round_index) > 0
+
 SUBMISSION_BUSINESS_FIELDS = {
     "loan",
     "engineers_change",

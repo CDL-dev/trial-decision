@@ -9,7 +9,7 @@ import streamlit as st
 
 from streamlit_app.services.current_match_service import get_current_match
 from streamlit_app.services.player_service import list_players, get_player_state
-from streamlit_app.services.submission_service import upsert_submission
+from streamlit_app.services.submission_service import upsert_submission, can_settle_round
 from streamlit_app.services.settlement_service import settle_current_round
 from streamlit_app.services.match_service import delete_match
 from streamlit_app.ui.shared.key_data import render_key_data
@@ -70,7 +70,7 @@ def render(db_path: Path):
 
     st.divider()
 
-    can_settle = len(submissions) > 0
+    can_settle = can_settle_round(db_path, match_id, current_round)
     if not can_settle:
         st.info("Waiting for at least one submission before settlement.")
         return

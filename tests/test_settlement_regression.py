@@ -9,6 +9,7 @@ from streamlit_app.db import bootstrap_db
 from streamlit_app.engine.adapter import settle_round, load_config
 from streamlit_app.engine.settlement import settle
 from streamlit_app.services.match_service import create_match, create_players, create_cities, start_match
+from streamlit_app.services.submission_service import can_settle_round
 
 
 def _jr_config():
@@ -127,23 +128,36 @@ def test_engineer_salary_cost_multiplies_months_per_round():
 # ── create_cities mapping ─────────────────────────────────────────────
 
 def test_create_cities_maps_bundled_preset_keys_correctly():
-    """create_cities reads max_loan, bank_interest_rate, avg_engineer_salary, etc."""
-    from streamlit_app.engine.adapter import load_config
-    config = load_config("JR")
-    cities_config = config.get("cities_config") or []
-    assert len(cities_config) == 4
+    """create_cities must write correct preset values into the cities table."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "test.db"
+        bootstrap_db(db_path)
 
-    sh = cities_config[0]
-    # Verify these keys exist (they map to the INSERT columns)
-    assert "max_loan" in sh
-    assert "bank_interest_rate" in sh
-    assert "avg_engineer_salary" in sh
-    assert "product_material_price" in sh
-    assert "population" in sh
-    assert "initial_penetration" in sh
-    # market_size should be population × penetration
-    ms = sh["population"] * sh["initial_penetration"]
-    assert ms > 0
+        config = load_config("JR")
+        config_json = json.dumps(config)
+        mid = create_match(db_path, "Test", 2, 3, config_json)
+        create_cities(db_path, mid, config)
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM cities WHERE match_id = ? ORDER BY id", (mid,)
+        ).fetchall()
+        conn.close()
+
+        assert len(rows) == 4
+
+        sh = {r["city_name"]: r for r in rows}["Shenzhen"]
+        config_sh = config["cities_config"][0]
+
+        # Verify cities table has computed (not fallback) values
+        assert sh["loan_limit"] == config_sh["max_loan"]
+        assert sh["interest_rate"] == config_sh["bank_interest_rate"]
+        assert sh["engineer_salary_default"] == config_sh["avg_engineer_salary"]
+        assert sh["material_cost"] == config_sh["product_material_price"]
+        expected_market_size = config_sh["population"] * config_sh["initial_penetration"]
+        assert sh["market_size"] == expected_market_size
+        assert sh["avg_price"] == config_sh["avg_price"]
 
 
 # ── Market size demand ────────────────────────────────────────────────
@@ -178,7 +192,7 @@ def test_large_market_city_releases_more_demand_than_small_city():
 # ── Admin settlement gate ─────────────────────────────────────────────
 
 def test_admin_cannot_settle_without_submissions():
-    """can_settle must be False when no submissions exist for the current round."""
+    """can_settle_round() must return False when no submissions exist."""
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "test.db"
         bootstrap_db(db_path)
@@ -190,13 +204,11 @@ def test_admin_cannot_settle_without_submissions():
         create_cities(db_path, mid, config)
         start_match(db_path, mid)
 
-        conn = sqlite3.connect(db_path)
-        subs = conn.execute(
-            "SELECT COUNT(*) FROM round_submissions WHERE match_id = ? AND round_index = 1",
-            (mid,),
-        ).fetchone()
-        conn.close()
-        assert subs[0] == 0
+        # Round 1: no submissions — gate should be closed
+        assert not can_settle_round(db_path, mid, 1)
 
-        can_settle = subs[0] > 0
-        assert not can_settle
+        # After one submission — gate should open
+        from streamlit_app.services.submission_service import upsert_submission
+        upsert_submission(db_path, mid, 1, 1, {"loan": 0, "engineers_change": 0,
+            "engineer_salary": 5000, "quality_investment": 0, "volume": 0, "city_sales": {}})
+        assert can_settle_round(db_path, mid, 1)
