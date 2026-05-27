@@ -36,6 +36,13 @@ def render(db_path: Path):
         players = list_players(db_path, match_id)
         st.metric("Players", len(players))
 
+    # Player credentials drawer
+    with st.sidebar:
+        with st.expander("Player Credentials", expanded=False):
+            for p in players:
+                pw = p.get("password_plain", "")
+                st.code(f"P{p['player_no']}: {pw}", language=None)
+
     config = json.loads(match["config_json"])
     render_key_data(config)
 
