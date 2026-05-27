@@ -49,13 +49,13 @@ def render_mechanics(config: dict):
     col1, col2 = st.columns(2)
     with col1:
         st.metric("Starting Capital", fmt_money(starting_capital))
-        st.caption(
-            f"1 Product = {eng_per_prod} Engineers x {eng_hours} Hours "
-            f"+ 1 Material (¥{product_material:,.0f})"
+        st.metric(
+            "Production Formula",
+            f"1 Product = {eng_per_prod} Engineers x {eng_hours}h + 1 Material (¥{product_material:,.0f})"
         )
         st.metric("Engineer Salary Range", f"¥{eng_salary_min:,} — ¥{eng_salary_max:,}")
         if price_min and price_max:
-            st.caption(f"Product Price Range: {fmt_money(price_min)} — {fmt_money(price_max)}")
+            st.metric("Product Price Range", f"{fmt_money(price_min)} — {fmt_money(price_max)}")
     with col2:
         st.caption(f"Add Sales Agent: {fmt_money(agent_hire)}")
         st.caption(f"Remove Sales Agent: {fmt_money(agent_fire)}")

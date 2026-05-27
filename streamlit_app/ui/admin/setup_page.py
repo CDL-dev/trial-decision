@@ -44,7 +44,9 @@ def render(db_path: Path):
         return
 
     # Preset selector outside form so Key Data can react
-    preset_key = st.selectbox("Preset", ["JR", "111516", "OBOS"], key="setup_preset")
+    PRESET_OPTIONS = {"#1": "JR", "#2": "111516", "#3": "OBOS"}
+    preset_label = st.selectbox("Preset", list(PRESET_OPTIONS.keys()), key="setup_preset")
+    preset_key = PRESET_OPTIONS[preset_label]
 
     # Key Data in main content area
     try:
@@ -56,7 +58,7 @@ def render(db_path: Path):
     with st.form("create_match_form"):
         name = st.text_input("Match Name", value="Trial Match")
         player_count = st.selectbox("Players", [1, 2, 3], index=2)
-        round_count = st.number_input("Rounds", min_value=2, max_value=10, value=4)
+        round_count = st.number_input("Rounds", min_value=1, max_value=3, value=3)
 
         submitted = st.form_submit_button("Create Match")
 
