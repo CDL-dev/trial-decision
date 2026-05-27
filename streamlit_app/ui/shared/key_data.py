@@ -57,6 +57,11 @@ def render_mechanics(config: dict):
         if price_min and price_max:
             st.metric("Product Price Range", f"{fmt_money(price_min)} — {fmt_money(price_max)}")
     with col2:
+        pqi_weight = config.get("pqi_old_product_weight", 1.0)
+        st.caption(
+            "Product Quality Index = "
+            f"Quality Investment / (Old Products × {pqi_weight} + New Products)"
+        )
         st.caption(f"Add Sales Agent: {fmt_money(agent_hire)}")
         st.caption(f"Remove Sales Agent: {fmt_money(agent_fire)}")
         st.caption(f"Market Report: {fmt_money(market_report)}")
