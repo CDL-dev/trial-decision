@@ -45,18 +45,21 @@ def render(db_path: Path):
 
     render_key_data(config)
 
+    prev_state = {}
     if current_round > 1:
         prev_state = get_player_state(db_path, player_id)
-        if prev_state:
-            col1, col2, col3 = st.columns(3)
-            cash = float(prev_state.get("cash", 0))
-            debt = float(prev_state.get("debt", 0))
-            with col1:
-                st.metric("Total Assets", fmt_money(cash))
-            with col2:
-                st.metric("Debt", fmt_money(debt))
-            with col3:
-                st.metric("Net Assets", fmt_money(cash - debt))
+    if prev_state:
+        col1, col2, col3 = st.columns(3)
+        cash = float(prev_state.get("cash", 0))
+        debt = float(prev_state.get("debt", 0))
+        with col1:
+            st.metric("Total Assets", fmt_money(cash))
+        with col2:
+            st.metric("Debt", fmt_money(debt))
+        with col3:
+            st.metric("Net Assets", fmt_money(cash - debt))
+
+    current_eng = int(prev_state.get("engineers", 0)) if prev_state else 0
 
     with st.form("decision_form"):
         st.subheader("Global Decisions")
@@ -68,6 +71,7 @@ def render(db_path: Path):
             max_loan = float(home_cfg.get("max_loan", 0))
             st.caption(f"Max loan: {fmt_money(max_loan)}")
             loan = st.number_input("Loan", min_value=0, max_value=int(max_loan) if max_loan > 0 else None, value=0, step=100000)
+            st.caption(f"Currently: {current_eng} engineers")
             engineers_change = st.number_input("Engineers Change", value=0)
             salary_min = int(config.get("engineer_salary_min", 1000))
             engineer_salary = st.number_input("Engineer Salary", min_value=salary_min, value=5000, step=500)
