@@ -16,9 +16,9 @@ import math
 
 def _base_cpi(quality_paid: float, marketing_paid: float, price: float,
               avg_price: float, pqi: float, market_size: float, config: dict) -> float:
-    k_pqi = float(config.get("cpi_k_pqi", 0.4))
-    k_mi = float(config.get("cpi_k_mi", 0.3))
-    k_spi = float(config.get("cpi_k_spi", 0.3))
+    k_pqi = float(config.get("cpi_k_pqi", 0.25))
+    k_mi = float(config.get("cpi_k_mi", 0.25))
+    k_spi = float(config.get("cpi_k_spi", 0.5))
     pqi_norm = math.log(1 + max(pqi, 0) / max(avg_price, 0.01))
     mi_norm = math.log(1 + marketing_paid / max(market_size, 1))
     if price > 0 and avg_price > 0:

@@ -38,6 +38,7 @@ def settle_current_round(db_path: Path, match_id: int) -> None:
         state = prev_state if prev_state else None
 
         conn_sub = sqlite3.connect(db_path)
+        conn_sub.row_factory = sqlite3.Row
         sub = conn_sub.execute(
             "SELECT payload_json FROM round_submissions "
             "WHERE match_id = ? AND round_index = ? AND player_id = ?",
@@ -75,32 +76,57 @@ def settle_current_round(db_path: Path, match_id: int) -> None:
         # Active teams in this city (agents > 0)
         active = [t for t in team_states if t.get("agents_by_city", {}).get(city_name, 0) > 0]
 
-        # City demand (v4m uptake)
+        # Per-team demand from individual base_cpi, then relative-share allocation
         uptake_cap = float(config.get("v4m_uptake_max", 0.95))
-        if active:
-            avg_cpi = sum(t.get("base_cpi_by_city", {}).get(city_name, 0) for t in active) / len(active)
-        else:
-            avg_cpi = 0
-        # uptake: sigmoid based on average team CPI in this city
-        steep = float(config.get("v4m_uptake_steepness", 2.0))
-        mid = float(config.get("v4m_uptake_midpoint", 1.0))
-        uptake = uptake_cap / (1.0 + math.exp(-steep * (avg_cpi - mid)))
-        city_demand = market_size * uptake
+        steep = float(config.get("v4m_uptake_steepness", 4.0))
+        mid = float(config.get("v4m_uptake_midpoint", 1.5))
+        # Each active team generates its own demand estimate
+        team_demands: dict[int, float] = {}
+        total_team_demand = 0.0
+        for t in active:
+            cpi_i = t.get("base_cpi_by_city", {}).get(city_name, 0)
+            uptake_i = uptake_cap / (1.0 + math.exp(-steep * (cpi_i - mid)))
+            d_i = market_size * uptake_i
+            team_demands[t["player_id"]] = d_i
+            total_team_demand += d_i
 
-        # Relative share allocation
-        total_cpi = sum(t.get("base_cpi_by_city", {}).get(city_name, 0) for t in active)
         allocated: dict[int, int] = {}
-        remaining_demand = int(city_demand)
+        remaining = 0
+        # First pass: proportional floor
         for t in active:
             pid = t["player_id"]
-            cpi_i = t.get("base_cpi_by_city", {}).get(city_name, 0)
-            if total_cpi > 0 and remaining_demand > 0:
-                share = cpi_i / total_cpi
-                alloc = min(int(share * int(city_demand)), remaining_demand)
+            d_i = team_demands.get(pid, 0)
+            if total_team_demand > 0:
+                a = int(d_i / total_team_demand * market_size * uptake_cap)
+                a = min(a, int(d_i))
             else:
-                alloc = 0
-            # Cap by team supply
+                a = 0
+            avail = t.get("available_products", 0) - t.get("total_sold_allocated", 0)
+            a = min(a, avail)
+            a = max(0, a)
+            allocated[pid] = a
+            remaining += a
+        # Second pass: distribute unmet demand to teams with supply remaining
+        remaining_supply = min(int(market_size * uptake_cap), sum(
+            t.get("available_products", 0) - t.get("total_sold_allocated", 0) for t in active
+        )) - remaining
+        for t in sorted(active, key=lambda x: team_demands.get(x["player_id"], 0), reverse=True):
+            if remaining_supply <= 0:
+                break
+            pid = t["player_id"]
+            avail = t.get("available_products", 0) - t.get("total_sold_allocated", 0) - allocated.get(pid, 0)
+            unmet = max(0, int(team_demands.get(pid, 0)) - allocated.get(pid, 0))
+            extra = min(unmet, avail, remaining_supply)
+            if extra > 0:
+                allocated[pid] = allocated.get(pid, 0) + extra
+                remaining_supply -= extra
+
+        for t in active:
+            pid = t["player_id"]
+            alloc = allocated.get(pid, 0)
             available = t.get("available_products", 0) - t.get("total_sold_allocated", 0)
+            alloc = min(alloc, available)
+            alloc = max(0, alloc)
             alloc = min(alloc, available)
             alloc = max(0, alloc)
             allocated[pid] = alloc
