@@ -43,10 +43,8 @@ def render_mechanics(config: dict):
     market_report = config.get("market_report_price", 200_000)
     product_material = config.get("product_material_price", 0)
 
-    cities_config = config.get("cities_config") or []
-    prices = [c.get("avg_price", 0) for c in cities_config if c.get("avg_price")]
-    price_min = min(prices) if prices else 0
-    price_max = max(prices) if prices else 0
+    price_min = config.get("product_price_min", 0)
+    price_max = config.get("product_price_max", 0)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -56,7 +54,8 @@ def render_mechanics(config: dict):
             f"+ 1 Material (¥{product_material:,.0f})"
         )
         st.metric("Engineer Salary Range", f"¥{eng_salary_min:,} — ¥{eng_salary_max:,}")
-        st.caption(f"Product Price Range: {fmt_money(price_min)} — {fmt_money(price_max)}")
+        if price_min and price_max:
+            st.caption(f"Product Price Range: {fmt_money(price_min)} — {fmt_money(price_max)}")
     with col2:
         st.caption(f"Add Sales Agent: {fmt_money(agent_hire)}")
         st.caption(f"Remove Sales Agent: {fmt_money(agent_fire)}")

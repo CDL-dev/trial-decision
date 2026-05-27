@@ -142,7 +142,9 @@
     "low_wage_affine_floor_engineer": 0.0,
     "unified_dynamic_near_avg_band_rel": 0.0091,
     "unified_dynamic_near_avg_dynamic_fraction": 0.1,
-    "promotion_lag_rounds": 2
+    "promotion_lag_rounds": 2,
+    "product_price_min": 3500.0,
+    "product_price_max": 25000.0
   },
   "111516": {
     "match_name": "?North JR?11.15-16 Beijing Huijia Private School",
