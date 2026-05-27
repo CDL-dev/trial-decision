@@ -120,3 +120,51 @@ def test_settle_round_second_round():
     assert len(r2["report"]) > 10
     # Round 2 should have more engineers than round 1 (carried over)
     assert r2["report"]["engineers"] >= r1["report"]["engineers"]
+
+
+def test_settle_round_has_no_tax_fields():
+    """Trial mode must not expose tax, profit_before_tax, or capital_after_tax."""
+    config = load_config("JR")
+    submission = {
+        "loan": 1000000,
+        "engineers_change": 2,
+        "engineer_salary": 8000,
+        "quality_investment": 50000,
+        "volume": 1000,
+        "city_sales": {
+            "Shenzhen": {"agents": 1, "marketing": 50000, "price": 4400, "market_report": True},
+        },
+    }
+    result = settle_round(submission, config, None, 1, 4, "Shenzhen")
+
+    report = result["report"]
+    cashflow = report.get("cashflow", {})
+
+    assert "tax" not in report
+    assert "profit_before_tax" not in report
+    assert "capital_after_tax" not in cashflow
+    assert "capital_end" in cashflow
+    assert "operating_profit" in report
+
+
+def test_settle_round_zero_price_falls_back_to_city_avg():
+    """A missing or zero price must fall back to the city's avg_price, not sell at 0."""
+    config = load_config("JR")
+    submission = {
+        "loan": 1000000,
+        "engineers_change": 2,
+        "engineer_salary": 8000,
+        "quality_investment": 50000,
+        "volume": 1000,
+        "city_sales": {
+            "Shenzhen": {"agents": 1, "marketing": 50000, "price": 0, "market_report": True},
+        },
+    }
+    result = settle_round(submission, config, None, 1, 4, "Shenzhen")
+
+    revenue = result["report"]["revenue_by_city"]["Shenzhen"]
+    sold = result["report"]["sold_by_city"]["Shenzhen"]
+    # If price were 0, revenue would be 0 even with units sold
+    # With fallback to avg_price (~4400), revenue should be > 0 when units sold
+    if sold > 0:
+        assert revenue > 0, f"Revenue should be > 0 with price fallback, got {revenue}"

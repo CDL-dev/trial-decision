@@ -1,4 +1,13 @@
-from streamlit_app.services.submission_service import merge_submission_with_override
+import json
+import sqlite3
+from pathlib import Path
+
+from streamlit_app.db import bootstrap_db
+from streamlit_app.services.submission_service import (
+    merge_submission_with_override,
+    upsert_submission,
+    upsert_override,
+)
 
 
 def test_merge_overrides_only_allowed_business_fields():
@@ -36,3 +45,64 @@ def test_merge_handles_none_inputs():
     result = merge_submission_with_override(None, None)
     assert result["business"] == {}
     assert result["admin_meta"] == {}
+
+
+def test_upsert_submission_overwrites_on_duplicate(tmp_path: Path):
+    db_path = tmp_path / "trial.db"
+    bootstrap_db(db_path)
+
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO matches (name, status, player_count, round_count, current_round, setup_stage, config_json) "
+        "VALUES ('test', 'active', 1, 4, 1, 'done', '{}')"
+    )
+    conn.commit()
+    conn.close()
+
+    upsert_submission(db_path, match_id=1, round_index=1, player_id=1,
+                      payload={"loan": 1000}, is_final=True)
+    upsert_submission(db_path, match_id=1, round_index=1, player_id=1,
+                      payload={"loan": 2000}, is_final=True)
+
+    conn = sqlite3.connect(db_path)
+    rows = conn.execute(
+        "SELECT COUNT(*) FROM round_submissions WHERE match_id=1 AND round_index=1 AND player_id=1"
+    ).fetchall()
+    payload = conn.execute(
+        "SELECT payload_json FROM round_submissions WHERE match_id=1 AND round_index=1 AND player_id=1"
+    ).fetchone()
+    conn.close()
+
+    assert rows[0][0] == 1
+    assert json.loads(payload[0])["loan"] == 2000
+
+
+def test_upsert_override_overwrites_on_duplicate(tmp_path: Path):
+    db_path = tmp_path / "trial.db"
+    bootstrap_db(db_path)
+
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO matches (name, status, player_count, round_count, current_round, setup_stage, config_json) "
+        "VALUES ('test', 'active', 1, 4, 1, 'done', '{}')"
+    )
+    conn.commit()
+    conn.close()
+
+    upsert_override(db_path, match_id=1, round_index=1, player_id=1,
+                    override={"engineers_change": 5}, bonus_penalty=0)
+    upsert_override(db_path, match_id=1, round_index=1, player_id=1,
+                    override={"engineers_change": 8}, bonus_penalty=500)
+
+    conn = sqlite3.connect(db_path)
+    rows = conn.execute(
+        "SELECT COUNT(*) FROM round_overrides WHERE match_id=1 AND round_index=1 AND player_id=1"
+    ).fetchall()
+    override_json, bp = conn.execute(
+        "SELECT override_json, bonus_penalty FROM round_overrides WHERE match_id=1 AND round_index=1 AND player_id=1"
+    ).fetchone()
+    conn.close()
+
+    assert rows[0][0] == 1
+    assert json.loads(override_json)["engineers_change"] == 8
+    assert bp == 500.0

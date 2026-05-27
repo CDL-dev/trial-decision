@@ -53,7 +53,7 @@ def settle(
     ranking_snapshot, new_state.
     """
     # ── Config values ──────────────────────────────────────────────
-    tax_rate = float(config.get("tax_rate", 0.0))
+    # Trial mode does not include tax. Interest is the final deduction.
     interest_rate = float(config.get("bank_interest_rate", 0.0))
     material_cost_per_unit = float(config.get("material_cost_per_unit", 800.0))
     storage_cost_per_unit = float(config.get("storage_cost_per_unit", 50.0))
@@ -128,7 +128,8 @@ def settle(
         city_sub = (fv.get(f"{city_name}_sales") or {}) if False else {}
         agents_delta = int(fv.get(f"{city_name}_agents", 0) or 0)
         marketing = float(fv.get(f"{city_name}_marketing", 0) or 0)
-        price = float(fv.get(f"{city_name}_price", 0) or 0)
+        raw_price = float(fv.get(f"{city_name}_price", 0) or 0)
+        price = raw_price if raw_price > 0 else float(city_cfg.get("avg_price", 5000.0))
         market_report = int(fv.get(f"{city_name}_market_report", 0) or 0)
 
         prev_agents = int(agents_by_city.get(city_name, 0))
@@ -170,18 +171,16 @@ def settle(
     cash -= interest_paid
     debt_after_interest = debt + interest_paid
     cashflow_interest = cash
+    cash_end = cash
 
-    # ── 7. Profit & Tax ────────────────────────────────────────────
+    # ── Trial: no tax mechanism ────────────────────────────────────
     total_cost = total_hr_cost + material_cost_total + total_sales_cost + storage_cost + interest_paid
-    profit_before_tax = total_revenue - total_cost + (bank_amount if bank_amount > 0 else 0)
-    tax = max(0.0, profit_before_tax * tax_rate)
-    cash -= tax
-    cashflow_final = cash
+    operating_profit = total_revenue - total_cost
 
     # ── 8. Build result ────────────────────────────────────────────
     new_state = {
         "round": round_index + 1,
-        "cash": cashflow_final,
+        "cash": cash_end,
         "debt": debt_after_interest,
         "workers": 0,
         "engineers": new_engineers,
@@ -195,9 +194,9 @@ def settle(
         "products_storage_units": 0,
         "patent_count": 0,
         "accumulated_research_investment": accumulated_research,
-        "valuation": cashflow_final,
+        "valuation": cash_end,
         "agents_by_city": agents_by_city,
-        "prev_round_profit": profit_before_tax - tax,
+        "prev_round_profit": operating_profit,
         "loan_rank_cache": None,
         "market_size_by_city": {c: city_cfgs[c].get("market_size", 0) for c in city_cfgs},
         "worker_promoted": 0,
@@ -231,8 +230,7 @@ def settle(
         "total_storage_cost": storage_cost,
         "total_cost": total_cost,
         "total_revenue": total_revenue,
-        "profit_before_tax": profit_before_tax,
-        "tax": tax,
+        "operating_profit": operating_profit,
         "interest_paid": interest_paid,
         "debt_after_interest": debt_after_interest,
         "sold_by_city": sold_by_city,
@@ -250,7 +248,7 @@ def settle(
             "capital_after_production": cashflow_production,
             "capital_after_sales": cashflow_sales,
             "capital_after_interest": cashflow_interest,
-            "capital_after_tax": cashflow_final,
+            "capital_end": cash_end,
         },
         "cpi_index_by_city": {c: 1.0 for c in city_cfgs},
         "price_index_by_city": {c: 1.0 for c in city_cfgs},
@@ -263,9 +261,9 @@ def settle(
 
     summary = {
         "round": round_index,
-        "total_assets": cashflow_final,
+        "total_assets": cash_end,
         "debt": debt_after_interest,
-        "net_assets": cashflow_final - debt_after_interest,
+        "net_assets": cash_end - debt_after_interest,
     }
 
     return {
@@ -279,7 +277,7 @@ def settle(
             "price_index_by_city": {c: 1.0 for c in city_cfgs},
         },
         "ranking_snapshot": {
-            "valuation": cashflow_final,
+            "valuation": cash_end,
             "debt": debt_after_interest,
         },
         "new_state": new_state,
