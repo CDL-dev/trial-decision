@@ -8,7 +8,7 @@ import streamlit as st
 
 from streamlit_app.services.current_match_service import get_current_match
 from streamlit_app.services.player_service import list_players, count_setup_completed
-from streamlit_app.services.match_service import start_match
+from streamlit_app.services.match_service import start_match, delete_match
 
 
 def render(db_path: Path):
@@ -50,4 +50,14 @@ def render(db_path: Path):
         if st.button("Start Match", type="primary"):
             start_match(db_path, match["id"])
             st.success("Match started! Round 1 begins.")
+            st.rerun()
+
+    # Danger zone
+    st.divider()
+    with st.expander("Danger Zone", expanded=False):
+        st.warning("Deleting this match will remove all players, submissions, and results.")
+        confirmed = st.checkbox("I confirm I want to delete this match and all its data")
+        if st.button("Delete Match", type="secondary", disabled=not confirmed):
+            delete_match(db_path, match["id"])
+            st.success("Match deleted. Create a new match to continue.")
             st.rerun()
