@@ -37,6 +37,9 @@ def render(db_path: Path):
         players = list_players(db_path, match_id)
         st.metric("Players", len(players))
 
+    if st.button("Refresh Status"):
+        st.rerun()
+
     # Player credentials drawer
     with st.sidebar:
         with st.expander("Player Credentials", expanded=False):
