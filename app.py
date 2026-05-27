@@ -111,11 +111,17 @@ def _render_playing_workspace():
     if "player_view" not in st.session_state:
         st.session_state["player_view"] = "Report"
 
+    # Check for switch request from sub-pages
+    if st.session_state.get("_switch_to_decision"):
+        st.session_state["player_view"] = "Decision"
+        st.session_state["_switch_to_decision"] = False
+
     view = st.radio(
         "View", ["Report", "Decision"],
         index=0 if st.session_state["player_view"] == "Report" else 1,
-        horizontal=True, key="player_view",
+        horizontal=True, key="_player_view_radio",
     )
+    st.session_state["player_view"] = view
 
     if view == "Report":
         player_report(DB_PATH)

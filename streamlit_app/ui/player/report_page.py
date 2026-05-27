@@ -126,5 +126,5 @@ def render(db_path: Path):
             st.rerun()
     else:
         if st.button("Go to Decision"):
-            st.session_state["player_view"] = "Decision"
+            st.session_state["_switch_to_decision"] = True
             st.rerun()
