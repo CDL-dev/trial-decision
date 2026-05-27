@@ -66,7 +66,7 @@ def render(db_path: Path):
     st.subheader("Finance — Cashflow")
     cf = report.get("cashflow_table", [])
     if cf:
-        cf_data = [{"Step": r[0], "Detail": r[1] if len(r) > 1 else "", "Change": r[2] if len(r) > 2 else "", "Balance": r[3] if len(r) > 3 else ""} for r in cf]
+        cf_data = [{"Step": r[0], "Change": r[2] if len(r) > 2 else "", "Balance": r[3] if len(r) > 3 else ""} for r in cf]
         st.dataframe(cf_data, width="stretch", hide_index=True)
 
     # HR
@@ -83,11 +83,7 @@ def render(db_path: Path):
         st.metric("Current", report.get("eng_effective", 0))
     with c5:
         st.metric("Salary/mo", fmt_money(report.get("eng_salary", 0)))
-    c1, c2 = st.columns(2)
-    with c1:
-        st.caption(f"Salary Paid: {fmt_money(report.get('salary_paid', 0))}")
-    with c2:
-        st.caption(f"Total HR Paid: {fmt_money(report.get('total_hr_paid', 0))}")
+    st.caption(f"Salary Paid: {fmt_money(report.get('salary_paid', 0))}")
 
     # Production
     st.divider()
@@ -141,9 +137,6 @@ def render(db_path: Path):
                 st.caption(f"Mkt Planned: {fmt_money(sd.get('marketing_planned', 0))}")
                 st.caption(f"Mkt Paid: {fmt_money(sd.get('marketing_paid', 0))}")
             with c3:
-                st.caption(f"base_cpi: {sd.get('base_cpi', 0):.4f}")
-                st.caption(f"uptake: {sd.get('uptake', 0):.4f}")
-                st.caption(f"demand: {sd.get('demand', 0):,.1f}")
                 st.caption(f"Share: {fmt_pct(sd.get('market_share', 0))}")
 
     # Config Snapshot
