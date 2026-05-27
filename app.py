@@ -7,6 +7,7 @@ import streamlit as st
 from streamlit_app.config import APP_TITLE, DB_PATH
 from streamlit_app.db import bootstrap_db
 from streamlit_app.services.current_match_service import get_match_phase, get_current_match
+from streamlit_app.services.match_service import delete_match
 from streamlit_app.services.player_service import get_player
 from streamlit_app.ui.admin.setup_page import render as admin_setup
 from streamlit_app.ui.admin.setup_confirm_page import render as admin_confirm
@@ -95,6 +96,14 @@ def _render_admin():
         match = get_current_match(DB_PATH)
         if match:
             st.info(f"Match '{match['name']}' has ended.")
+            st.divider()
+            with st.expander("Danger Zone", expanded=False):
+                st.warning("Deleting this match will remove all data.")
+                confirmed = st.checkbox("I confirm I want to delete this match and all its data")
+                if st.button("Delete Match", type="secondary", disabled=not confirmed):
+                    delete_match(DB_PATH, match["id"])
+                    st.success("Match deleted. Create a new match to continue.")
+                    st.rerun()
         # Show final results
         st.session_state["player_id"] = None
         player_final(DB_PATH)
