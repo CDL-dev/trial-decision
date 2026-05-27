@@ -87,5 +87,17 @@ def bootstrap_db(db_path: Path) -> None:
             """
         )
         conn.commit()
+
+        # Migrations: add columns that may be missing from older DBs
+        _migrate_add_column(conn, "players", "password_plain", "TEXT NOT NULL DEFAULT ''")
+        _migrate_add_column(conn, "players", "state_json", "TEXT NOT NULL DEFAULT '{}'")
     finally:
         conn.close()
+
+
+def _migrate_add_column(conn, table: str, column: str, col_def: str) -> None:
+    """Add a column if it doesn't already exist in the table."""
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
+    except sqlite3.OperationalError:
+        pass  # column already exists
