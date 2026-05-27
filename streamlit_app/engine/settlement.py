@@ -76,9 +76,19 @@ def settle(
     # ── Parse submission ─────────────────────────────────────────────
     bank_amount = float(fv.get("bank_amount", 0) or 0)
     engineers_delta = int(fv.get("engineers", 0) or 0)
-    engineer_salary = float(fv.get("engineer_salary", 0) or 0)
+    raw_engineer_salary = float(fv.get("engineer_salary", 0) or 0)
     quality_investment = float(fv.get("quality_investment", 0) or 0)
     volume_planned = int(fv.get("volume", 0) or 0)
+
+    # Clamp engineer salary to preset min/max, with carry-forward from previous state
+    salary_min = float(config.get("engineer_salary_min", 1000))
+    salary_max = float(config.get("engineer_salary_max", 10000))
+    engineer_salary = max(salary_min, min(salary_max, raw_engineer_salary))
+    # If submitted salary is 0/null but player has existing engineers, carry forward their salary
+    if raw_engineer_salary <= 0 and current_engineers > 0:
+        prev_salary = float(state.get("engineer_salary", 0))
+        if prev_salary >= salary_min:
+            engineer_salary = prev_salary
 
     cashflow_rows: list[list] = []
     cashflow_rows.append(["Starting Capital", "", "", fmt_m(cash_start)])
@@ -106,23 +116,22 @@ def settle(
         new_engineers = 0
 
     training_cost = engineers_hired * training_per_engineer
-    total_engineer_salary = new_engineers * engineer_salary
+    months_per_round = float(config.get("months_per_round", 3.0))
+    total_engineer_salary = new_engineers * engineer_salary * months_per_round
     total_hr_cost = total_engineer_salary + training_cost
     cash -= total_hr_cost
-    detail_parts = [f"{new_engineers} eng × ¥{engineer_salary:,.0f}"]
+    detail_parts = [f"{new_engineers} eng × ¥{engineer_salary:,.0f}/mo × {months_per_round:.0f}mo"]
     if training_cost > 0:
         detail_parts.append(f"training {engineers_hired} hired ¥{training_cost:,.0f}")
     cashflow_rows.append(["Engineer Cost", " + ".join(detail_parts), fmt_m(-total_hr_cost), fmt_m(cash)])
 
     # ── 3. Production ────────────────────────────────────────────────
-    # Engineer capacity constraint
+    # Engineer capacity: complete groups only, hours_per_month (not × months)
     hours_per_month = float(config.get("hours_per_month", 504.0))
-    months_per_round = float(config.get("months_per_round", 3.0))
-    total_engineer_hours = new_engineers * hours_per_month * months_per_round
-    max_products_by_engineers = total_engineer_hours / max(eng_hours_per_prod * eng_per_prod, 0.01)
-    capacity_limit = int(max_products_by_engineers)
-    if new_engineers == 0:
-        capacity_limit = 0  # no engineers = no production
+    products_per_group_base = hours_per_month / max(eng_hours_per_prod, 0.01)
+    engineer_groups = new_engineers // max(int(eng_per_prod), 1)
+    capacity_limit = int(engineer_groups * products_per_group_base)
+    total_engineer_hours = new_engineers * hours_per_month
 
     quality_bonus = _quality_yield_bonus(quality_investment)
     volume_effective = int(volume_planned * quality_bonus)
@@ -273,6 +282,10 @@ def settle(
             "storage_cost_per_unit": storage_cost_per_unit,
             "engineer_per_product": eng_per_prod,
             "engineer_hours_per_product": eng_hours_per_prod,
+            "hours_per_month": hours_per_month,
+            "months_per_round": months_per_round,
+            "engineer_salary_min": salary_min,
+            "engineer_salary_max": salary_max,
             "interest_rate": interest_rate,
             "training_per_engineer": training_per_engineer,
             "agent_hire_price": agent_hire_price,
