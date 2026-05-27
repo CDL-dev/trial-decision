@@ -114,6 +114,9 @@ def create_cities(db_path: Path, match_id: int, config: dict) -> None:
     conn = sqlite3.connect(db_path)
     try:
         for city in cities_config:
+            name = city.get("name", "")
+            population = float(city.get("population", 0))
+            penetration = float(city.get("initial_penetration", 0.02))
             conn.execute(
                 """
                 INSERT INTO cities (match_id, city_name, loan_limit, interest_rate,
@@ -122,12 +125,12 @@ def create_cities(db_path: Path, match_id: int, config: dict) -> None:
                 """,
                 (
                     match_id,
-                    city.get("name", ""),
-                    float(city.get("loan_limit", 0)),
-                    float(city.get("interest_rate", 0.05)),
-                    float(city.get("engineer_salary_default", 5000)),
-                    float(city.get("material_cost", 800)),
-                    float(city.get("market_size", 100_000)),
+                    name,
+                    float(city.get("max_loan", 0)),
+                    float(city.get("bank_interest_rate", 0.05)),
+                    float(city.get("avg_engineer_salary", 5000)),
+                    float(city.get("product_material_price", 800)),
+                    population * penetration,
                     float(city.get("avg_price", 5000)),
                     1,
                 ),

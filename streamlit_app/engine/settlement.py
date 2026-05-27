@@ -6,10 +6,13 @@ from __future__ import annotations
 import math
 
 
-def _agents_base_sales(agents: int) -> float:
+def _agents_base_sales(agents: int, market_size: float) -> float:
+    """Base sales driven by agents and market size."""
     if agents <= 0:
         return 0.0
-    return 300.0 + 200.0 * math.log(1 + agents)
+    # Each agent covers ~0.5% of the addressable market, with diminishing returns
+    coverage = min(1.0, agents * 0.005)
+    return market_size * coverage * (1.0 + 0.3 * math.log(1 + agents))
 
 
 def _marketing_multiplier(marketing: float, base_market_size: float) -> float:
@@ -106,18 +109,31 @@ def settle(
     total_engineer_salary = new_engineers * engineer_salary
     total_hr_cost = total_engineer_salary + training_cost
     cash -= total_hr_cost
-    cashflow_rows.append(["Engineer Salary", f"{new_engineers} × ¥{engineer_salary:,.0f}", fmt_m(-total_engineer_salary), fmt_m(cash)])
+    detail_parts = [f"{new_engineers} eng × ¥{engineer_salary:,.0f}"]
     if training_cost > 0:
-        cashflow_rows.append(["Engineer Training", f"{engineers_hired} hired", fmt_m(-training_cost), fmt_m(cash)])
+        detail_parts.append(f"training {engineers_hired} hired ¥{training_cost:,.0f}")
+    cashflow_rows.append(["Engineer Cost", " + ".join(detail_parts), fmt_m(-total_hr_cost), fmt_m(cash)])
 
     # ── 3. Production ────────────────────────────────────────────────
+    # Engineer capacity constraint
+    hours_per_month = float(config.get("hours_per_month", 504.0))
+    months_per_round = float(config.get("months_per_round", 3.0))
+    total_engineer_hours = new_engineers * hours_per_month * months_per_round
+    max_products_by_engineers = total_engineer_hours / max(eng_hours_per_prod * eng_per_prod, 0.01)
+    capacity_limit = int(max_products_by_engineers)
+    if new_engineers == 0:
+        capacity_limit = 0  # no engineers = no production
+
     quality_bonus = _quality_yield_bonus(quality_investment)
     volume_effective = int(volume_planned * quality_bonus)
-    material_cost_total = volume_planned * material_cost_per_unit  # cost based on planned input, not bonus output
-    cash -= material_cost_total
-
-    products_produced = volume_effective
+    # Cap production by engineer capacity
+    volume_capped = min(volume_effective, capacity_limit)
+    products_produced = volume_capped
     available_products = products_inventory + products_produced
+
+    # Material cost based on planned volume (you pay for what you plan, not what you get)
+    material_cost_total = volume_planned * material_cost_per_unit
+    cash -= material_cost_total
 
     cashflow_rows.append(["Material Cost", f"{volume_planned} units × ¥{material_cost_per_unit:,.0f}", fmt_m(-material_cost_total), fmt_m(cash)])
 
@@ -155,10 +171,12 @@ def settle(
             agent_cost = abs(agents_delta) * agent_fire_price
             total_agent_hire_cost += agent_cost
 
-        market_size = float(city_cfg.get("market_size", 100_000))
+        population = float(city_cfg.get("population", 0))
+        penetration = float(city_cfg.get("initial_penetration", 0.02))
+        market_size = population * penetration
         avg_price = float(city_cfg.get("avg_price", 5000.0))
 
-        base_sales = _agents_base_sales(new_agents)
+        base_sales = _agents_base_sales(new_agents, market_size)
         mkt_mult = _marketing_multiplier(marketing, market_size)
         price_mult = _price_effect(price, avg_price)
         city_demand = base_sales * mkt_mult * price_mult
@@ -283,8 +301,11 @@ def settle(
         "quality_investment": quality_investment,
         "quality_bonus": round(quality_bonus, 4),
         "volume_effective": volume_effective,
+        "capacity_limit": capacity_limit,
+        "volume_capped": volume_capped,
         "products_inventory_before": products_inventory,
         "products_produced": products_produced,
+        "total_engineer_hours": total_engineer_hours,
         "available_products": available_products,
         "material_cost_per_unit": material_cost_per_unit,
         "material_cost_total": material_cost_total,

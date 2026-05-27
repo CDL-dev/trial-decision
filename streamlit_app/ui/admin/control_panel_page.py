@@ -70,7 +70,7 @@ def render(db_path: Path):
 
     st.divider()
 
-    can_settle = len(submissions) > 0 or current_round > 0
+    can_settle = len(submissions) > 0
     if not can_settle:
         st.info("Waiting for at least one submission before settlement.")
         return

@@ -35,15 +35,14 @@ def settle_current_round(db_path: Path, match_id: int) -> None:
             (match_id, current_round, player_id),
         ).fetchone()
 
+        # Get player state before building default submission
+        prev_state = get_player_state(db_path, player_id)
+        state = prev_state if prev_state else None
+
         if sub:
             submission = json.loads(sub["payload_json"])
         else:
-            submission = _build_default_submission(config)
-
-        # Get player state
-        state = get_player_state(db_path, player_id)
-        if not state:
-            state = None
+            submission = _build_default_submission(config, prev_state)
 
         # Run settlement
         result = settle_round(
@@ -100,8 +99,12 @@ def settle_current_round(db_path: Path, match_id: int) -> None:
         advance_round(db_path, match_id)
 
 
-def _build_default_submission(config: dict) -> dict:
-    """Build a zero-input submission for players who didn't submit."""
+def _build_default_submission(config: dict, prev_state: dict | None = None) -> dict:
+    """Build a zero-input submission for players who didn't submit.
+
+    Carries forward the previous round's engineer salary so existing
+    engineers still incur wage costs.
+    """
     cities_config = config.get("cities_config") or []
     city_sales = {}
     for city in cities_config:
@@ -112,10 +115,17 @@ def _build_default_submission(config: dict) -> dict:
             "price": float(city.get("avg_price", 5000)),
             "market_report": False,
         }
+    # Carry forward existing engineer salary if player has engineers
+    default_salary = float(config.get("initial_engineer_salary", 5000))
+    if prev_state:
+        prev_engineers = int(prev_state.get("engineers", 0))
+        prev_salary = float(prev_state.get("engineer_salary", 0))
+        if prev_engineers > 0 and prev_salary > 0:
+            default_salary = prev_salary
     return {
         "loan": 0,
         "engineers_change": 0,
-        "engineer_salary": 0,
+        "engineer_salary": default_salary,
         "quality_investment": 0,
         "volume": 0,
         "city_sales": city_sales,
