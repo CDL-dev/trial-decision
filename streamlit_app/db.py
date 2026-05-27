@@ -31,7 +31,8 @@ def bootstrap_db(db_path: Path) -> None:
                 company_name TEXT NOT NULL,
                 home_city TEXT NOT NULL,
                 setup_completed INTEGER NOT NULL,
-                is_active INTEGER NOT NULL
+                is_active INTEGER NOT NULL,
+                state_json TEXT NOT NULL DEFAULT '{}'
             );
             CREATE TABLE IF NOT EXISTS cities (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
