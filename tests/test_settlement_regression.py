@@ -298,6 +298,27 @@ def test_supply_allocation_does_not_drop_last_unit_due_to_rounding():
     assert result["report"]["products_sold"] >= 1
 
 
+def test_allocation_uses_only_active_city_demand():
+    """Zero-agent cities must not dilute shares of active cities."""
+    config = _jr_config()
+    state = _state(config, cash=2000000, engineers=12, engineer_salary=8000)
+    fv = _base_fv()
+    fv["volume"] = 300
+    # Shenzhen and Chongqing have agents; Suzhou and Dalian do not
+    fv["Shenzhen_agents"] = 1
+    fv["Shenzhen_marketing"] = 50000
+    fv["Chongqing_agents"] = 1
+    fv["Chongqing_marketing"] = 50000
+    result = settle(fv=fv, config=config, state=state, round_index=1)
+    sold = result["report"]["sold_by_city"]
+    assert sold["Suzhou"] == 0
+    assert sold["Dalian"] == 0
+    assert sold["Shenzhen"] > 0
+    assert sold["Chongqing"] > 0
+    # Total sold must equal sum (invariant)
+    assert result["report"]["products_sold"] == sum(sold.values())
+
+
 def test_products_sold_equals_sum_of_sold_by_city():
     """Invariant: total sold must equal sum of per-city sold."""
     config = _jr_config()

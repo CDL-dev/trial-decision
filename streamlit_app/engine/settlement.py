@@ -300,34 +300,39 @@ def settle(
     if actual_agt_paid > 0:
         cashflow.append(["Agent Cost", "", fmt(-actual_agt_paid), fmt(cash)])
 
-    # Pass 2: allocate sales proportionally, capped by demand and supply
-    total_demand = sum(d for d in demand_by_city.values())
+    # Pass 2: allocate sales to active cities only (agents >= 1).
+    # Zero-agent cities get 0 — their demand does not dilute active-city shares.
+    active_cities = [c for c in city_cfgs if sales_detail[c]["agents_now"] > 0]
+    total_demand_active = sum(demand_by_city.get(c, 0) for c in active_cities)
     remaining = available
-    # First pass: proportional allocation (floor to avoid over-allocation)
-    allocated: dict[str, int] = {}
-    for city_name in city_cfgs:
-        city_demand = demand_by_city.get(city_name, 0)
-        if sales_detail[city_name]["agents_now"] == 0:
-            allocated[city_name] = 0
-        elif total_demand > 0:
-            share = city_demand / total_demand
+    allocated: dict[str, int] = {c: 0 for c in city_cfgs}
+
+    # First pass: proportional floor allocation among active cities
+    if total_demand_active > 0:
+        for city_name in active_cities:
+            city_demand = demand_by_city.get(city_name, 0)
+            share = city_demand / total_demand_active
             alloc = int(share * available)
             allocated[city_name] = min(alloc, int(city_demand))
-        else:
-            allocated[city_name] = 0
-        remaining -= allocated[city_name]
-    # Second pass: distribute remaining units to cities with unmet demand
-    for city_name in city_cfgs:
-        if remaining <= 0:
-            break
-        if sales_detail[city_name]["agents_now"] == 0:
-            continue
-        city_demand = demand_by_city.get(city_name, 0)
-        unmet = int(city_demand) - allocated[city_name]
-        extra = min(unmet, remaining)
-        if extra > 0:
-            allocated[city_name] += extra
-            remaining -= extra
+            remaining -= allocated[city_name]
+
+    # Second pass: distribute remaining to active cities with unmet demand,
+    # sorted by unmet demand descending (no dictionary-order bias)
+    if remaining > 0 and active_cities:
+        unmet_cities = sorted(
+            active_cities,
+            key=lambda c: int(demand_by_city.get(c, 0)) - allocated[c],
+            reverse=True,
+        )
+        for city_name in unmet_cities:
+            if remaining <= 0:
+                break
+            city_demand = demand_by_city.get(city_name, 0)
+            unmet = max(0, int(city_demand) - allocated[city_name])
+            extra = min(unmet, remaining)
+            if extra > 0:
+                allocated[city_name] += extra
+                remaining -= extra
 
     for city_name in city_cfgs:
         sold = allocated.get(city_name, 0)
