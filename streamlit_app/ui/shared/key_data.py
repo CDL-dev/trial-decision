@@ -28,7 +28,7 @@ def render_city_table(config: dict):
             "Avg Engineer Salary": fmt_money(c.get("avg_engineer_salary", 0)),
         })
 
-    st.dataframe(rows, use_container_width=True, hide_index=True)
+    st.dataframe(rows, width="stretch", hide_index=True)
 
 
 def render_mechanics(config: dict):
