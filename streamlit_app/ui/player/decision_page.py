@@ -11,6 +11,7 @@ from streamlit_app.services.current_match_service import get_current_match
 from streamlit_app.services.player_service import get_player, get_player_state
 from streamlit_app.services.submission_service import upsert_submission
 from streamlit_app.ui.shared.formatters import fmt_money
+from streamlit_app.ui.shared.key_data import render_key_data
 
 
 def get_trial_decision_fields() -> list[str]:
@@ -41,6 +42,8 @@ def render(db_path: Path):
 
     st.subheader(f"Round {current_round}/{match['round_count']}")
     st.caption(f"Company: {player['company_name']} | Home: {player['home_city']}")
+
+    render_key_data(config)
 
     if current_round > 1:
         prev_state = get_player_state(db_path, player_id)

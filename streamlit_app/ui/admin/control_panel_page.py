@@ -11,6 +11,7 @@ from streamlit_app.services.current_match_service import get_current_match
 from streamlit_app.services.player_service import list_players, get_player_state
 from streamlit_app.services.submission_service import upsert_submission
 from streamlit_app.services.settlement_service import settle_current_round
+from streamlit_app.ui.shared.key_data import render_key_data
 
 
 def render(db_path: Path):
@@ -34,6 +35,9 @@ def render(db_path: Path):
     with col3:
         players = list_players(db_path, match_id)
         st.metric("Players", len(players))
+
+    config = json.loads(match["config_json"])
+    render_key_data(config)
 
     st.divider()
     st.subheader("Submission Status")
