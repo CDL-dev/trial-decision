@@ -47,12 +47,11 @@ def render(db_path: Path):
     preset_key = st.selectbox("Preset", ["JR", "111516", "OBOS"], key="setup_preset")
 
     # Key Data in main content area
-    with st.expander("Key Data — Game Parameters", expanded=False):
-        try:
-            config_preview = load_config(preset_key)
-            render_key_data(config_preview)
-        except Exception:
-            st.warning("Could not load preset data.")
+    try:
+        config_preview = load_config(preset_key)
+        render_key_data(config_preview)
+    except Exception:
+        st.warning("Could not load preset data.")
 
     with st.form("create_match_form"):
         name = st.text_input("Match Name", value="Trial Match")
