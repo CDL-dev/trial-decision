@@ -295,5 +295,33 @@ def test_supply_allocation_does_not_drop_last_unit_due_to_rounding():
     fv["Shenzhen_marketing"] = 100000
     fv["Shenzhen_agents"] = 1  # need an agent to sell
     result = settle(fv=fv, config=config, state=state, round_index=1)
-    # With inventory and demand, at least 1 unit should sell (not 0 from rounding)
     assert result["report"]["products_sold"] >= 1
+
+
+def test_products_sold_equals_sum_of_sold_by_city():
+    """Invariant: total sold must equal sum of per-city sold."""
+    config = _jr_config()
+    state = _state(config, cash=2000000, engineers=12, engineer_salary=8000)
+    fv = _base_fv()
+    fv["volume"] = 400
+    for city in config.get("cities", []):
+        fv[f"{city}_marketing"] = 50000
+        fv[f"{city}_agents"] = 1
+    result = settle(fv=fv, config=config, state=state, round_index=1)
+    report = result["report"]
+    assert report["products_sold"] == sum(report["sold_by_city"].values())
+
+
+def test_inventory_after_equals_available_minus_sold():
+    """Invariant: unsold = available - sold."""
+    config = _jr_config()
+    state = _state(config, cash=2000000, engineers=12, engineer_salary=8000)
+    fv = _base_fv()
+    fv["volume"] = 400
+    for city in config.get("cities", []):
+        fv[f"{city}_marketing"] = 50000
+        fv[f"{city}_agents"] = 1
+    result = settle(fv=fv, config=config, state=state, round_index=1)
+    report = result["report"]
+    expected = report["available"] - report["products_sold"]
+    assert report["products_inventory_after"] == expected

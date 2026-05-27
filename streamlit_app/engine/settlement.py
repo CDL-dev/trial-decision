@@ -300,29 +300,44 @@ def settle(
     if actual_agt_paid > 0:
         cashflow.append(["Agent Cost", "", fmt(-actual_agt_paid), fmt(cash)])
 
-    # Pass 2: allocate sales — greedy by demand, capped by supply
-    # Sort cities by demand descending to minimize rounding loss
-    city_order = sorted(city_cfgs.keys(), key=lambda c: demand_by_city.get(c, 0), reverse=True)
+    # Pass 2: allocate sales proportionally, capped by demand and supply
+    total_demand = sum(d for d in demand_by_city.values())
     remaining = available
-    for city_name in city_order:
+    # First pass: proportional allocation (floor to avoid over-allocation)
+    allocated: dict[str, int] = {}
+    for city_name in city_cfgs:
         city_demand = demand_by_city.get(city_name, 0)
-        # Agent gate: zero agents → cannot sell in this city
         if sales_detail[city_name]["agents_now"] == 0:
-            sold = 0
+            allocated[city_name] = 0
+        elif total_demand > 0:
+            share = city_demand / total_demand
+            alloc = int(share * available)
+            allocated[city_name] = min(alloc, int(city_demand))
         else:
-            sold = min(int(city_demand), remaining)
-        sold_by_city[city_name] = sold
-        total_sold += sold
-        remaining -= sold
-        sold_by_city[city_name] = sold
-        total_sold += sold
+            allocated[city_name] = 0
+        remaining -= allocated[city_name]
+    # Second pass: distribute remaining units to cities with unmet demand
+    for city_name in city_cfgs:
+        if remaining <= 0:
+            break
+        if sales_detail[city_name]["agents_now"] == 0:
+            continue
+        city_demand = demand_by_city.get(city_name, 0)
+        unmet = int(city_demand) - allocated[city_name]
+        extra = min(unmet, remaining)
+        if extra > 0:
+            allocated[city_name] += extra
+            remaining -= extra
 
+    for city_name in city_cfgs:
+        sold = allocated.get(city_name, 0)
+        sold_by_city[city_name] = sold
+        total_sold += sold
         price = sales_detail[city_name]["price"]
         revenue = sold * price
         revenue_by_city[city_name] = revenue
         total_revenue += revenue
         share_by_city[city_name] = sold / max(sales_detail[city_name]["market_size"], 1)
-
         sales_detail[city_name]["sold"] = sold
         sales_detail[city_name]["revenue"] = revenue
         sales_detail[city_name]["market_share"] = round(share_by_city[city_name], 6)
