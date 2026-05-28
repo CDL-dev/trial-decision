@@ -1,4 +1,4 @@
-"""Player report page structured like the trial report view."""
+"""Player report page with report sections aligned to the main templates."""
 
 from __future__ import annotations
 
@@ -20,20 +20,50 @@ def build_cashflow_table_rows(cashflow_table: list[list]) -> list[dict]:
     headers = cashflow_table[0]
     rows: list[dict] = []
     for row in cashflow_table[1:]:
-        rows.append({
-            headers[0]: row[0] if len(row) > 0 else "",
-            headers[1]: row[1] if len(row) > 1 else "",
-            headers[2]: row[2] if len(row) > 2 else "",
-            headers[3]: row[3] if len(row) > 3 else "",
-        })
+        rows.append(
+            {
+                headers[0]: row[0] if len(row) > 0 else "",
+                headers[1]: row[1] if len(row) > 1 else "",
+                headers[2]: row[2] if len(row) > 2 else "",
+                headers[3]: row[3] if len(row) > 3 else "",
+            }
+        )
+    return rows
+
+
+def build_hr_rows(report: dict) -> list[dict]:
+    """Build a concise human resources table."""
+    previous_engineers = report.get("eng_effective", 0) - report.get("eng_hired", 0) + report.get("eng_fired", 0)
+    rows = [
+        {
+            "Role": "Engineers",
+            "Previous": previous_engineers,
+            "Added": report.get("eng_hired", 0),
+            "Removed": report.get("eng_fired", 0),
+            "Working": report.get("eng_effective", 0),
+            "Salary": fmt_money(report.get("eng_salary", 0)),
+            "Avg Salary": fmt_money(report.get("eng_salary", 0)),
+        }
+    ]
+    if "workers_now" in report or "workers_effective" in report:
+        rows.insert(
+            0,
+            {
+                "Role": "Workers",
+                "Previous": report.get("workers_now", 0),
+                "Added": report.get("workers_now", 0),
+                "Removed": 0,
+                "Working": report.get("workers_effective", 0),
+                "Salary": fmt_money(report.get("worker_salary", 0)),
+                "Avg Salary": fmt_money(report.get("worker_salary", 0)),
+            },
+        )
     return rows
 
 
 def build_production_rows(report: dict) -> list[dict]:
     """Build production rows for the player report."""
-    rows = [
-        {"": "Volume Planned", "Units": report.get("volume_planned", 0)},
-    ]
+    rows = [{"": "Volume Planned", "Units": report.get("volume_planned", 0)}]
     if "parts_produced" in report:
         rows.append({"": "Parts Produced", "Units": report.get("parts_produced", 0)})
     rows.extend(
@@ -46,26 +76,72 @@ def build_production_rows(report: dict) -> list[dict]:
     return rows
 
 
+def build_production_detail_rows(report: dict) -> list[dict]:
+    """Build the production detail table mirroring the main report structure."""
+    rows = []
+    if "parts_produced" in report:
+        rows.append(
+            {
+                "Details": "Components",
+                "Storage": report.get("parts_storage_units_after", 0),
+                "Output": report.get("parts_produced", 0),
+                "Material Cost": fmt_money(report.get("parts_material_paid", 0)),
+            }
+        )
+    rows.append(
+        {
+            "Details": "Products",
+            "Storage": report.get("products_storage_units_after", 0),
+            "Output": report.get("products_produced", 0),
+            "Material Cost": fmt_money(report.get("material_paid", 0)),
+        }
+    )
+    return rows
+
+
+def build_sales_rows(report: dict) -> list[dict]:
+    """Build a sales table grouped by city."""
+    rows = []
+    sales_detail = report.get("sales_detail_by_city", {}) or {}
+    for city_name, sd in sales_detail.items():
+        rows.append(
+            {
+                "City": city_name,
+                "Agents": sd.get("agents_now", 0),
+                "Marketing Investment": fmt_money(sd.get("marketing_paid", 0)),
+                "Product Quality Index": f"{float(report.get('pqi', 0) or 0):,.2f}",
+                "Price": fmt_money(sd.get("price", 0)),
+                "Sales Volume": sd.get("sold", 0),
+                "Market Share": fmt_pct(sd.get("market_share", 0)),
+                "Revenue": fmt_money(sd.get("revenue", 0)),
+            }
+        )
+    return rows
+
+
 def build_market_report_sections(report: dict) -> list[dict]:
     """Build ordered market report sections for display."""
     sections = []
     market_report_by_city = report.get("market_report_by_city", {}) or {}
+    has_management = float(report.get("management_paid", 0) or 0) > 0
     for city_name in sorted(market_report_by_city.keys()):
         city_report = market_report_by_city.get(city_name) or {}
         if not city_report.get("ordered"):
             continue
         rows = []
         for row in city_report.get("teams", []) or []:
-            rows.append({
-                "Company": row.get("company_name", ""),
-                "Price": fmt_money(row.get("price", 0)),
+            item = {
+                "Team": row.get("company_name", ""),
                 "Agents": row.get("agents", 0),
-                "Marketing": fmt_money(row.get("marketing", 0)),
-                "PQI": f"{float(row.get('pqi', 0) or 0):,.2f}",
-                "Sold": row.get("sold", 0),
-                "Revenue": fmt_money(row.get("revenue", 0)),
+                "Marketing Investment": fmt_money(row.get("marketing", 0)),
+                "Product Quality Index": f"{float(row.get('pqi', 0) or 0):,.2f}",
+                "Price": fmt_money(row.get("price", 0)),
+                "Sales Volume": row.get("sold", 0),
                 "Market Share": fmt_pct(row.get("market_share", 0)),
-            })
+            }
+            if has_management:
+                item["Management Index"] = f"{float(row.get('management_index', 0) or 0):,.2f}"
+            rows.append(item)
         sections.append({"city": city_name, "rows": rows})
     return sections
 
@@ -93,61 +169,44 @@ def render_report_content(
         st.metric("Operating Profit", fmt_money(summary["operating_profit"]))
     c1, c2 = st.columns(2)
     with c1:
-        st.metric("Revenue", fmt_money(summary["total_revenue"]))
+        st.metric("Sales Revenue", fmt_money(summary["total_revenue"]))
     with c2:
-        st.metric("Total Cost", fmt_money(summary["total_cost"]))
+        st.metric("Cost", fmt_money(summary["total_cost"]))
+    st.caption("Net Assets = Total Assets - Debt. Operating Profit = Sales Revenue - Total Cost.")
 
     st.divider()
-    st.subheader("Finance")
-    cf = report.get("cashflow_table", [])
-    if cf:
-        st.dataframe(build_cashflow_table_rows(cf), width="stretch", hide_index=True)
+    st.subheader("Finance Report")
+    cashflow_rows = build_cashflow_table_rows(report.get("cashflow_table", []))
+    if cashflow_rows:
+        st.dataframe(cashflow_rows, width="stretch", hide_index=True)
 
     st.divider()
     st.subheader("Human Resources")
-    prev = report.get("eng_effective", 0) - report.get("eng_hired", 0) + report.get("eng_fired", 0)
-    hr_data = [
-        {"": "Previous", "Engineers": prev},
-        {"": "Hired", "Engineers": report.get("eng_hired", 0)},
-        {"": "Fired", "Engineers": report.get("eng_fired", 0)},
-        {"": "Working", "Engineers": report.get("eng_effective", 0)},
+    st.dataframe(build_hr_rows(report), width="stretch", hide_index=True)
+    hr_notes = [
+        f"Engineer Salary Paid: {fmt_money(report.get('salary_paid', 0))}",
     ]
-    st.dataframe(hr_data, width="stretch", hide_index=True)
-    st.caption(f"Salary/mo: {fmt_money(report.get('eng_salary', 0))}    |    Salary Paid: {fmt_money(report.get('salary_paid', 0))}")
     if "workers_now" in report or "workers_effective" in report:
-        st.caption(
-            f"Workers: {report.get('workers_now', 0)}    |    "
-            f"Effective Workers: {report.get('workers_effective', 0)}    |    "
-            f"Worker Salary Paid: {fmt_money(report.get('worker_salary_paid', 0))}"
-        )
+        hr_notes.insert(0, f"Worker Salary Paid: {fmt_money(report.get('worker_salary_paid', 0))}")
+    st.caption(" | ".join(hr_notes))
 
     st.divider()
-    st.subheader("Production")
+    st.subheader("Production Report")
     st.dataframe(build_production_rows(report), width="stretch", hide_index=True)
-    pqi = report.get("pqi", 0)
-    st.caption(
-        f"PQI: {pqi:,.2f}    |    "
-        f"Material Paid: {fmt_money(report.get('material_paid', 0))}    |    "
-        f"Parts Material Paid: {fmt_money(report.get('parts_material_paid', 0))}    |    "
-        f"Storage Paid: {fmt_money(report.get('storage_paid', 0))}    |    "
-        f"Storage Units: {report.get('products_storage_units_before', 0)} -> {report.get('products_storage_units_after', 0)}    |    "
-        f"Parts Inv: {report.get('parts_inventory_before', 0)} -> {report.get('parts_inventory_after', 0)}"
-    )
+    st.dataframe(build_production_detail_rows(report), width="stretch", hide_index=True)
+    prod_notes = [
+        f"PQI: {float(report.get('pqi', 0) or 0):,.2f}",
+        f"Product Storage Units: {report.get('products_storage_units_before', 0)} -> {report.get('products_storage_units_after', 0)}",
+    ]
+    if "parts_inventory_before" in report:
+        prod_notes.append(
+            f"Component Inventory: {report.get('parts_inventory_before', 0)} -> {report.get('parts_inventory_after', 0)}"
+        )
+    st.caption(" | ".join(prod_notes))
 
     st.divider()
-    st.subheader("Sales")
-    sales_detail = report.get("sales_detail_by_city", {})
-    sales_rows = []
-    for city_name, sd in sales_detail.items():
-        sales_rows.append({
-            "City": city_name,
-            "Agents": sd.get("agents_now", 0),
-            "Mkt Paid": fmt_money(sd.get("marketing_paid", 0)),
-            "Price": fmt_money(sd.get("price", 0)),
-            "Sold": sd.get("sold", 0),
-            "Revenue": fmt_money(sd.get("revenue", 0)),
-            "Share": fmt_pct(sd.get("market_share", 0)),
-        })
+    st.subheader("Sales Report")
+    sales_rows = build_sales_rows(report)
     if sales_rows:
         st.dataframe(sales_rows, width="stretch", hide_index=True)
 

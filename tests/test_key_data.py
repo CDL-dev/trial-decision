@@ -1,6 +1,57 @@
 from streamlit_app.ui.shared import key_data
 
 
+def test_render_city_table_includes_product_and_component_cost_columns(monkeypatch):
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        key_data.st,
+        "dataframe",
+        lambda rows, **kwargs: captured.update({"rows": rows, "kwargs": kwargs}),
+    )
+
+    key_data.render_city_table(
+        {
+            "cities_config": [
+                {
+                    "name": "Chengdu",
+                    "population": 4000000,
+                    "initial_penetration": 0.016,
+                    "avg_price": 8800,
+                    "product_material_price": 630,
+                    "product_storage_price": 100,
+                    "part_material_price": 258,
+                    "part_storage_price": 24,
+                    "max_loan": 3500000,
+                    "bank_interest_rate": 0.036,
+                    "avg_engineer_salary": 5600,
+                },
+                {
+                    "name": "Sample",
+                    "population": 1000,
+                    "initial_penetration": 0.01,
+                    "avg_price": 100,
+                    "product_material_price": 10,
+                    "product_storage_price": 1,
+                    "part_material_price": None,
+                    "part_storage_price": None,
+                    "max_loan": 1000,
+                    "bank_interest_rate": 0.01,
+                    "avg_engineer_salary": 1000,
+                },
+            ]
+        }
+    )
+
+    rows = captured["rows"]
+    assert rows[0]["Product Material"] != "-"
+    assert rows[0]["Product Storage"] != "-"
+    assert rows[0]["Component Material"] != "-"
+    assert rows[0]["Component Storage"] != "-"
+    assert rows[1]["Component Material"] == "-"
+    assert rows[1]["Component Storage"] == "-"
+
+
 def test_render_mechanics_without_worker_uses_single_product_formula(monkeypatch):
     records: list[tuple[str, str]] = []
 
@@ -75,3 +126,4 @@ def test_render_mechanics_with_worker_uses_component_and_product_formulas(monkey
     assert any("1 Product = 4 Inexperienced Engineers + 14 Hours + 7 Components + 1 Product Material" in text for text in markdowns)
     assert "Worker Mechanism: On" in captions
     assert "Management Mechanism: On" in captions
+    assert "Management Index = Management Investment / (Workers + Engineers)" in captions

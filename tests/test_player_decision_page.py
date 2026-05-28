@@ -8,8 +8,11 @@ from streamlit_app.ui.player.decision_page import (
 )
 from streamlit_app.ui.player.report_page import (
     build_cashflow_table_rows,
+    build_hr_rows,
     build_market_report_sections,
+    build_production_detail_rows,
     build_production_rows,
+    build_sales_rows,
 )
 
 
@@ -140,8 +143,65 @@ def test_build_market_report_sections_only_keeps_ordered_cities():
 
     assert [section["city"] for section in sections] == ["Shanghai"]
     row = sections[0]["rows"][0]
-    assert row["Company"] == "Alpha"
+    assert row["Team"] == "Alpha"
     assert row["Agents"] == 2
-    assert row["PQI"] == "35.16"
-    assert row["Sold"] == 55
+    assert row["Product Quality Index"] == "35.16"
+    assert row["Sales Volume"] == 55
     assert row["Market Share"] == "11.0%"
+
+
+def test_build_hr_rows_includes_workers_when_present():
+    rows = build_hr_rows(
+        {
+            "eng_effective": 20,
+            "eng_hired": 5,
+            "eng_fired": 1,
+            "eng_salary": 5600,
+            "workers_now": 30,
+            "workers_effective": 28,
+            "worker_salary": 2900,
+        }
+    )
+    assert rows[0]["Role"] == "Workers"
+    assert rows[1]["Role"] == "Engineers"
+
+
+def test_build_production_detail_rows_includes_component_line_when_parts_exist():
+    rows = build_production_detail_rows(
+        {
+            "parts_storage_units_after": 140,
+            "parts_produced": 700,
+            "parts_material_paid": 180600,
+            "products_storage_units_after": 56,
+            "products_produced": 56,
+            "material_paid": 35280,
+        }
+    )
+    assert rows[0]["Details"] == "Components"
+    assert rows[0]["Storage"] == 140
+    assert rows[1]["Details"] == "Products"
+    assert rows[1]["Storage"] == 56
+    assert "Storage Cost" not in rows[0]
+    assert "Storage Cost" not in rows[1]
+
+
+def test_build_sales_rows_uses_report_city_fields():
+    rows = build_sales_rows(
+        {
+            "pqi": 40.0,
+            "sales_detail_by_city": {
+                "Chengdu": {
+                    "agents_now": 1,
+                    "marketing_paid": 250000,
+                    "price": 24850,
+                    "sold": 1176,
+                    "revenue": 29223600,
+                    "market_share": 0.11,
+                }
+            },
+        }
+    )
+    assert rows[0]["City"] == "Chengdu"
+    assert rows[0]["Agents"] == 1
+    assert rows[0]["Product Quality Index"] == "40.00"
+    assert rows[0]["Sales Volume"] == 1176

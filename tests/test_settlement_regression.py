@@ -1149,6 +1149,46 @@ def test_inventory_after_is_capped_by_affordable_storage_capacity():
     assert report["products_inventory_after"] == report["products_storage_units_after"]
 
 
+def test_parts_inventory_after_is_capped_by_affordable_storage_capacity():
+    """Component carryover should be capped by affordable storage units when cash is short."""
+    config = load_config("OBOS")
+    config["has_workers_mechanism"] = True
+    config["part_storage_price"] = 1000
+    state = _obos_state(config, cash=2_000_000, parts_inventory=0, parts_storage_units=0)
+    result = settle(
+        fv={
+            "bank_amount": 0,
+            "workers": 684,
+            "worker_salary": 2950,
+            "engineers": 0,
+            "engineer_salary": 5650,
+            "quality_investment": 0,
+            "management_investment": 0,
+            "volume": 2340,
+            "Shanghai_agents": 0,
+            "Shanghai_marketing": 0,
+            "Shanghai_price": 24850,
+            "Shanghai_market_report": 0,
+            "Guangzhou_agents": 0,
+            "Guangzhou_marketing": 0,
+            "Guangzhou_price": 24850,
+            "Guangzhou_market_report": 0,
+            "Chengdu_agents": 0,
+            "Chengdu_marketing": 0,
+            "Chengdu_price": 24850,
+            "Chengdu_market_report": 0,
+        },
+        config=config,
+        state=state,
+        round_index=1,
+        player_home_city="Chengdu",
+    )
+    report = result["report"]
+    assert report["parts_produced"] > 0
+    assert report["parts_storage_units_after"] < report["parts_produced"]
+    assert report["parts_inventory_after"] == report["parts_storage_units_after"]
+
+
 def test_workers_limit_parts():
     config = load_config("OBOS")
     config["has_workers_mechanism"] = True

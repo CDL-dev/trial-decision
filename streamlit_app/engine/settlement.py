@@ -609,7 +609,7 @@ def settle_player_phase1(
         float(config.get("part_storage_price", 0.0)),
     )
     if has_workers:
-        parts_required_storage = int(parts_inventory_after_manufacturing)
+        parts_required_storage = int(parts_inventory_before + parts_produced)
         parts_incremental_storage = max(0, parts_required_storage - parts_storage_units_before)
         if parts_storage_unit_cost > 0:
             parts_storage_units_purchased = min(parts_incremental_storage, int(cash // parts_storage_unit_cost))

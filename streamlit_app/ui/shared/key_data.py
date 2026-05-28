@@ -19,8 +19,10 @@ def render_city_table(config: dict):
                 "Population": f'{c.get("population", 0):,}',
                 "Penetration": fmt_pct(c.get("initial_penetration", 0)),
                 "Avg Price": fmt_money(c.get("avg_price", 0)),
-                "Material Cost": fmt_money(c.get("product_material_price", 0)),
-                "Storage Cost": fmt_money(c.get("product_storage_price", 0)),
+                "Product Material": fmt_money(c.get("product_material_price", 0)),
+                "Product Storage": fmt_money(c.get("product_storage_price", 0)),
+                "Component Material": fmt_money(c.get("part_material_price", 0)) if c.get("part_material_price") is not None else "-",
+                "Component Storage": fmt_money(c.get("part_storage_price", 0)) if c.get("part_storage_price") is not None else "-",
                 "Loan Limit": fmt_money(c.get("max_loan", 0)),
                 "Interest Rate": fmt_pct(c.get("bank_interest_rate", 0)),
                 "Avg Engineer Salary": fmt_money(c.get("avg_engineer_salary", 0)),
@@ -79,6 +81,8 @@ def render_mechanics(config: dict):
             "Product Quality Index = "
             f"Quality Investment / (Old Products x {pqi_weight} + New Products)"
         )
+        if has_management:
+            st.caption("Management Index = Management Investment / (Workers + Engineers)")
         st.caption(f"Add Sales Agent: {fmt_money(agent_hire)}")
         st.caption(f"Remove Sales Agent: {fmt_money(agent_fire)}")
         st.caption(f"Market Report: {fmt_money(market_report)}")
