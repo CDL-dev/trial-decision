@@ -41,6 +41,17 @@ pytest
 - `TeamSalesInput.mi` is available for management-sensitive models.
 - In the bundled shell, `mi` is derived from actual paid management investment per person, not the raw planned input.
 
+### Using `mi` in Custom Models
+
+- Treat `mi` as a normalized management signal, not as direct cash spend.
+- `mi` already reflects phase-1 affordability. If the team planned management investment but could not pay it, the shell should pass a lower value or zero.
+- If your model does not support the management mechanism, it is valid to ignore `mi`.
+- If your model does support management, prefer exposing your intermediate management diagnostics through `TeamSalesResult.debug`, for example:
+  - `mi_idx`
+  - `mi_rel`
+  - model-specific management strength terms
+- The bundled `trial_v4m` and `expv1` models both use `mi` as part of their competitiveness calculation when management is enabled, so they are good reference points for new public models.
+
 ## Project Structure
 
 - `app.py`: Streamlit entry point and top-level routing
