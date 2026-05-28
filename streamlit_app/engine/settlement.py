@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import math
 
+from streamlit_app.engine.models.contracts import CityModelInput, TeamSalesInput
+from streamlit_app.engine.models.registry import get_sales_model
+
 
 def _clip01(value: float) -> float:
     return max(0.0, min(1.0, float(value)))
@@ -93,6 +96,41 @@ def _cfg_city_value(config: dict, city_cfg: dict | None, key: str, default: floa
     return float(config.get(key, default) or 0.0)
 
 
+def _resolve_city_market_sizes(config: dict, state: dict | None) -> dict[str, float]:
+    """Resolve current-round market sizes with optional round-over-round growth."""
+    cities_config = config.get("cities_config") or []
+    growth_rate = float(config.get("market_size_round_growth_rate") or 0.10)
+    evolve_enabled = bool(config.get("market_size_evolution_enabled", True))
+    prev_sizes = dict((state or {}).get("market_size_by_city") or {})
+    out: dict[str, float] = {}
+    for city_cfg in cities_config:
+        city_name = str(city_cfg.get("name") or "").strip()
+        if not city_name:
+            continue
+        base = float(city_cfg.get("population", 0) or 0.0) * float(city_cfg.get("initial_penetration", 0.02) or 0.0)
+        if base <= 0:
+            out[city_name] = 0.0
+            continue
+        if evolve_enabled:
+            out[city_name] = float(prev_sizes.get(city_name) or base)
+        else:
+            out[city_name] = base
+    return out
+
+
+def _advance_city_market_sizes(current_sizes: dict[str, float], config: dict) -> dict[str, float]:
+    """Compute next-round market sizes from this round's effective sizes."""
+    growth_rate = float(config.get("market_size_round_growth_rate") or 0.10)
+    evolve_enabled = bool(config.get("market_size_evolution_enabled", True))
+    if not evolve_enabled:
+        return dict(current_sizes)
+    factor = 1.0 + growth_rate
+    return {
+        city_name: max(0.0, float(size) * factor)
+        for city_name, size in current_sizes.items()
+    }
+
+
 def _synthetic_price_target_from_config(config: dict, state: dict | None = None) -> float | None:
     if str(config.get("cpi_price_target_mode") or "city_avg").strip().lower() != "price_max_pct":
         return None
@@ -130,6 +168,7 @@ def _build_cashflow_summary(
     marketing_paid: float,
     agent_cost_paid: float,
     quality_paid: float,
+    management_paid: float,
     storage_paid: float,
     interest_due: float,
     cash_end: float,
@@ -144,126 +183,13 @@ def _build_cashflow_summary(
         "marketing_cost": marketing_paid,
         "agent_cost": agent_cost_paid,
         "quality_investment": quality_paid,
+        "management_investment": management_paid,
         "storage_cost": storage_paid,
         "bank_interest": interest_due,
         "debt_before_interest": debt_start,
         "debt_after_interest": debt_after,
         "capital_end": cash_end,
     }
-
-
-def _base_cpi_detail(row: dict, avg_price: float, market_size: float) -> dict[str, float]:
-    del market_size
-    agents = max(0, int(float(row.get("agents") or 0.0)))
-    if agents < 1:
-        return {
-            "price_idx": 0.0,
-            "spi_idx": 0.0,
-            "pqi_idx": 0.0,
-            "mi_idx": 0.0,
-            "base_cpi_linear": 0.0,
-            "base_cpi_geometric": 0.0,
-            "base_cpi": 0.0,
-        }
-
-    price = float(row.get("price") or 0.0)
-    price_idx = _clip01(avg_price / price) if price > 0 and avg_price > 0 else 0.0
-
-    ks = _compute_adaptive_k(avg_price)
-    spi_raw = max(0.0, float(row.get("marketing") or 0.0)) * (1.0 + 0.10 * agents)
-    spi_idx = spi_raw / (spi_raw + max(1.0, float(ks["K_spi"]))) if spi_raw > 0 else 0.0
-
-    pqi_raw = max(0.0, float(row.get("pqi") or 0.0))
-    pqi_idx = pqi_raw / (pqi_raw + max(1.0, float(ks["K_pqi"]))) if pqi_raw > 0 else 0.0
-
-    base_linear = _clip01(0.4 * price_idx + 0.3 * spi_idx + 0.3 * pqi_idx)
-    base_geometric = (
-        max(price_idx, 1e-9) ** 0.4
-        * max(spi_idx, 1e-9) ** 0.3
-        * max(pqi_idx, 1e-9) ** 0.3
-    )
-
-    return {
-        "price_idx": float(price_idx),
-        "spi_idx": float(spi_idx),
-        "pqi_idx": float(pqi_idx),
-        "mi_idx": 0.0,
-        "base_cpi_linear": float(base_linear),
-        "base_cpi_geometric": float(base_geometric),
-        "base_cpi": float(base_geometric),
-    }
-
-
-def _city_uptake(rows: list[dict], avg_price: float, market_size: float, config: dict) -> float:
-    if not rows or avg_price <= 0 or market_size <= 0:
-        return 0.0
-    scale = max(0.0, float(config.get("v4m_uptake_sum_scale") or 0.22))
-    active_values: list[float] = []
-    for row in rows:
-        detail = _base_cpi_detail(row, avg_price, market_size)
-        cpi = float(detail.get("base_cpi") or 0.0)
-        if cpi > 0:
-            active_values.append(_clip01(cpi))
-    if not active_values:
-        return 0.0
-    return _clip01(scale * sum(active_values))
-
-
-def _relative_sales_detail(rows: list[dict], total_sales: float, avg_price: float, market_size: float) -> dict[int, dict]:
-    if not rows or total_sales <= 0:
-        return {
-            int(row["team_id"]): {
-                "pred_sales": 0.0,
-                "price_rel": 0.0,
-                "spi_rel": 0.0,
-                "pqi_rel": 0.0,
-                "score": 0.0,
-                **_base_cpi_detail(row, avg_price, market_size),
-            }
-            for row in rows
-        }
-
-    alpha = 0.5
-    price_vals: list[float] = []
-    spi_vals: list[float] = []
-    pqi_vals: list[float] = []
-    for row in rows:
-        agents = max(0.0, float(row.get("agents") or 0.0))
-        if agents < 1:
-            price_vals.append(0.0)
-            spi_vals.append(0.0)
-            pqi_vals.append(0.0)
-            continue
-        price = float(row.get("price") or 0.0)
-        price_vals.append((avg_price / price) ** alpha if price > 0 and avg_price > 0 else 0.0)
-        marketing = float(row.get("marketing") or 0.0)
-        spi_vals.append(max(0.0, marketing * (1.0 + 0.10 * agents)))
-        pqi_vals.append(_transform_component(float(row.get("pqi") or 0.0), "log1p_sqrt"))
-
-    price_rel = _normalize_positive(price_vals)
-    spi_rel = _normalize_positive(spi_vals)
-    pqi_rel = _normalize_positive(pqi_vals)
-
-    scores = [
-        max(0.0, 0.4 * price_rel[idx] + 0.3 * spi_rel[idx] + 0.3 * pqi_rel[idx])
-        for idx in range(len(rows))
-    ]
-    score_rel = _normalize_positive(scores)
-    if not any(score_rel):
-        n = len(rows)
-        score_rel = [1.0 / float(n) for _ in rows] if n > 0 else []
-
-    out: dict[int, dict] = {}
-    for idx, row in enumerate(rows):
-        out[int(row["team_id"])] = {
-            "pred_sales": float(total_sales) * score_rel[idx],
-            "price_rel": price_rel[idx],
-            "spi_rel": spi_rel[idx],
-            "pqi_rel": pqi_rel[idx],
-            "score": scores[idx] if idx < len(scores) else 0.0,
-            **_base_cpi_detail(row, avg_price, market_size),
-        }
-    return out
 
 
 def _largest_remainder_scale(city_values: dict[str, int], target_total: int) -> dict[str, int]:
@@ -322,7 +248,7 @@ def _build_market_report_snapshot(team_states: list[dict], cities_config: list[d
 
 
 def _allocate_single_team_like_main(team: dict, config: dict, cities_config: list[dict]) -> None:
-    """Use the main project's single-team CPI sales path for trial solo settlement."""
+    """Legacy single-team compatibility path kept for trial/main-program parity checks."""
     city_names = [c.get("name") for c in cities_config if c.get("name")]
     city_cfgs = {c.get("name"): c for c in cities_config if c.get("name")}
     sales_prep = team.get("sales_prep", {})
@@ -401,6 +327,7 @@ def allocate_trial_v4m(team_states: list[dict], config: dict) -> list[dict]:
     """Shared single-player/multi-player trial v4m allocator."""
     cities_config = config.get("cities_config") or []
     city_names = [c.get("name") for c in cities_config if c.get("name")]
+    sales_model = get_sales_model(str(config.get("sales_model", "trial_v4m")))
 
     for team in team_states:
         team["sold_by_city"] = {city: 0 for city in city_names}
@@ -417,42 +344,55 @@ def allocate_trial_v4m(team_states: list[dict], config: dict) -> list[dict]:
         city_name = city_cfg.get("name")
         if not city_name:
             continue
-        market_size = float(city_cfg.get("population", 0)) * float(city_cfg.get("initial_penetration", 0.02))
+        market_size = float(team_states[0].get("market_size_by_city", {}).get(city_name, 0.0) or 0.0) if team_states else 0.0
+        if market_size <= 0:
+            market_size = float(city_cfg.get("population", 0)) * float(city_cfg.get("initial_penetration", 0.02))
         avg_price = float(city_cfg.get("avg_price", 0.0))
 
-        rows: list[dict] = []
-        active_supply_cap = 0.0
+        teams_input: list[TeamSalesInput] = []
         for team in team_states:
             sales = team.get("sales_prep", {}).get(city_name, {})
-            row = {
-                "team_id": int(team["player_id"]),
-                "price": float(sales.get("price") or avg_price or 0.0),
-                "agents": int(sales.get("competitive_agents_now", sales.get("agents_now", 0)) or 0),
-                "marketing": float(sales.get("competitive_marketing", sales.get("marketing_paid", 0.0)) or 0.0),
-                "pqi": float(team.get("pqi") or 0.0),
-                "mi": 0.0,
-                "available_products": float(team.get("available_products") or 0.0),
-            }
-            rows.append(row)
-            if int(row["agents"]) >= 1:
-                active_supply_cap += float(row["available_products"])
-
-        uptake = _city_uptake(rows, avg_price, market_size, config)
-        demand_total_sales = market_size * uptake
-        city_total_sales = min(demand_total_sales, active_supply_cap) if active_supply_cap > 0 else 0.0
-        detail_map = _relative_sales_detail(rows, city_total_sales, avg_price, market_size)
+            teams_input.append(
+                TeamSalesInput(
+                    player_id=int(team["player_id"]),
+                    company_name=str(team.get("company_name") or f"Player {team.get('player_id')}"),
+                    city_name=city_name,
+                    price=float(sales.get("price") or avg_price or 0.0),
+                    agents=int(sales.get("competitive_agents_now", sales.get("agents_now", 0)) or 0),
+                    marketing=float(sales.get("competitive_marketing", sales.get("marketing_paid", 0.0)) or 0.0),
+                    pqi=float(team.get("pqi") or 0.0),
+                    mi=float(team.get("mi") or 0.0),
+                    available_products=int(team.get("available_products") or 0),
+                    market_size=market_size,
+                    avg_price=avg_price,
+                )
+            )
+        city_result = sales_model.run_city(
+            CityModelInput(
+                city_name=city_name,
+                market_size=market_size,
+                avg_price=avg_price,
+                teams=teams_input,
+                model_config=config,
+            )
+        )
+        result_by_player = {int(team_result.player_id): team_result for team_result in city_result.team_results}
 
         for team in team_states:
             player_id = int(team["player_id"])
-            detail = detail_map.get(player_id, {})
-            rounded_sales_by_team[player_id][city_name] = max(0, int(round(float(detail.get("pred_sales") or 0.0))))
-            base_cpi = float(detail.get("base_cpi") or 0.0)
+            team_result = result_by_player.get(player_id)
+            if team_result is None:
+                continue
+            rounded_sales_by_team[player_id][city_name] = max(0, int(team_result.allocated_sales or 0))
+            base_cpi = float(team_result.base_cpi or 0.0)
             team["cpi_by_city"][city_name] = base_cpi
             team["base_cpi_by_city"][city_name] = base_cpi
 
     for team in team_states:
         player_id = int(team["player_id"])
         available_products = max(0, int(team.get("available_products") or 0))
+        # The model returns city-level integer allocations; this shell step rescales them
+        # across cities per player so final sold units stay within each player's total supply.
         scaled = _largest_remainder_scale(rounded_sales_by_team[player_id], available_products)
         team["sold_by_city"] = {city: int(scaled.get(city, 0)) for city in city_names}
         team["revenue_by_city"] = {
@@ -494,19 +434,31 @@ def settle_player_phase1(
     home_city_cfg = city_cfgs.get(player_home_city) if player_home_city else None
     interest_rate = _cfg_city_value(config, home_city_cfg, "bank_interest_rate", float(config.get("bank_interest_rate", 0.0)))
     pqi_w = float(config.get("pqi_old_product_weight", 1.1))
+    market_size_by_city = _resolve_city_market_sizes(config, state)
 
     cash = float(state["cash"]) if state else float(config.get("starting_capital", 0))
     cash_start = cash
     debt = float(state["debt"]) if state else 0.0
     cur_eng = int(state["engineers"]) if state else 0
+    cur_workers = int(state.get("workers", 0)) if state else 0
     inv_before = int(state["products_inventory"]) if state else 0
+    parts_inventory_before = int(state.get("parts_inventory", 0)) if state else 0
+    parts_storage_units_before = int(state.get("parts_storage_units", 0)) if state else 0
     agents_by_city = dict(state.get("agents_by_city", {})) if state else {}
 
     bank = float(fv.get("bank_amount", 0) or 0)
+    worker_d = int(fv.get("workers", 0) or 0)
+    worker_salary_min = float(config.get("worker_salary_min", 1000.0))
+    raw_worker_salary = float(fv.get("worker_salary", 0) or 0)
+    worker_s = max(worker_salary_min, raw_worker_salary)
+    if raw_worker_salary <= 0 and cur_workers > 0:
+        worker_s = max(worker_salary_min, float(state.get("worker_salary", worker_s) or worker_s))
     eng_d = int(fv.get("engineers", 0) or 0)
     raw_s = float(fv.get("engineer_salary", 0) or 0)
     q_planned = float(fv.get("quality_investment", 0) or 0)
+    mgmt_planned = float(fv.get("management_investment", 0) or 0)
     vol_planned = int(fv.get("volume", 0) or 0)
+    has_management = bool(config.get("has_management_mechanism", False))
 
     eng_s = max(s_min, min(s_max, raw_s))
     if raw_s <= 0 and cur_eng > 0:
@@ -563,11 +515,74 @@ def settle_player_phase1(
 
     if eng_per_prod > 0 and eng_hours > 0:
         products_per_group_base = (hours_per_round / eng_hours) * productivity_mult_engineers
-        capacity = int(int(eff_eng // eng_per_prod) * products_per_group_base)
+        max_products_by_engineers = int(int(eff_eng // eng_per_prod) * products_per_group_base)
     else:
-        capacity = 0
-    report_capacity = capacity
-    produced_planned = min(capacity, vol_planned) if vol_planned > 0 else capacity
+        max_products_by_engineers = 0
+    report_capacity = max_products_by_engineers
+    produced_planned_by_engineers = min(max_products_by_engineers, vol_planned) if vol_planned > 0 else max_products_by_engineers
+
+    has_workers = bool(config.get("has_workers_mechanism", False))
+    workers_now = 0
+    workers_effective = 0
+    worker_salary_paid = 0.0
+    worker_salary_now = worker_s
+    parts_produced = 0
+    parts_material_paid = 0.0
+    max_products_by_parts = max_products_by_engineers
+    parts_per_product = int(max(1, float(config.get("parts_per_product", 7))))
+    if has_workers:
+        workers_target = max(0, cur_workers + worker_d)
+        worker_salary_cost_full = workers_target * worker_s * months
+        worker_salary_paid = min(worker_salary_cost_full, cash)
+        cash -= worker_salary_paid
+        if worker_salary_cost_full > 0:
+            workers_effective = int(workers_target * (worker_salary_paid / worker_salary_cost_full))
+        workers_now = workers_target
+        cashflow.append(
+            ["Worker Salary", f"{workers_effective}/{workers_now} workers x {worker_s:,.0f}/mo x {months:.0f}mo", fmt(-worker_salary_paid), fmt(cash)]
+        )
+        worker_per_part = float(config.get("worker_per_part", 1.0) or 1.0)
+        worker_hours_per_part = float(config.get("worker_hours_per_part", 24.0) or 24.0)
+        avg_worker_salary_this_round = _cfg_city_value(
+            config,
+            home_city_cfg,
+            "avg_worker_salary",
+            float(config.get("avg_worker_salary", config.get("initial_worker_salary", worker_s or 1.0)) or (worker_s or 1.0)),
+        )
+        productivity_mult_workers = 1.0
+        if avg_worker_salary_this_round > 0:
+            if pm_mode == "no_bonus_above_avg" and worker_s >= avg_worker_salary_this_round - 1e-12:
+                productivity_mult_workers = 1.0
+            else:
+                productivity_mult_workers = worker_s / avg_worker_salary_this_round
+        if worker_per_part > 0 and worker_hours_per_part > 0:
+            parts_per_group_base = (hours_per_round / worker_hours_per_part) * productivity_mult_workers
+            parts_capacity_max = int(int(workers_effective // worker_per_part) * parts_per_group_base)
+        else:
+            parts_capacity_max = 0
+        parts_target_for_volume = max(0, vol_planned * parts_per_product)
+        parts_gap = max(0, parts_target_for_volume - parts_inventory_before)
+        parts_target = min(parts_capacity_max, parts_gap if vol_planned > 0 else parts_capacity_max)
+        part_material_unit_cost = _cfg_city_value(
+            config,
+            home_city_cfg,
+            "part_material_price",
+            float(config.get("part_material_price", 0.0)),
+        )
+        if part_material_unit_cost > 0:
+            affordable_parts = int(cash // part_material_unit_cost)
+            parts_produced = min(parts_target, affordable_parts)
+            parts_material_paid = parts_produced * part_material_unit_cost
+        else:
+            parts_produced = parts_target
+            parts_material_paid = 0.0
+        cash -= parts_material_paid
+        if parts_material_paid > 0:
+            cashflow.append(["Part Material Cost", f"{parts_produced} parts x {part_material_unit_cost:,.0f}", fmt(-parts_material_paid), fmt(cash)])
+        parts_available_total = max(0, parts_inventory_before + parts_produced)
+        max_products_by_parts = parts_available_total // parts_per_product if parts_per_product > 0 else 0
+
+    produced_planned = min(produced_planned_by_engineers, max_products_by_parts) if has_workers else produced_planned_by_engineers
 
     product_unit_cost = _cfg_city_value(config, home_city_cfg, "product_material_price", mat_per_unit)
     storage_unit_cost = _cfg_city_value(
@@ -585,6 +600,30 @@ def settle_player_phase1(
         material_paid = 0.0
     cash -= material_paid
     effective_volume_input = produced
+    parts_used_for_products = produced * parts_per_product if has_workers else 0
+    parts_inventory_after_manufacturing = max(0, parts_inventory_before + parts_produced - parts_used_for_products) if has_workers else 0
+    parts_storage_unit_cost = _cfg_city_value(
+        config,
+        home_city_cfg,
+        "part_storage_price",
+        float(config.get("part_storage_price", 0.0)),
+    )
+    if has_workers:
+        parts_required_storage = int(parts_inventory_after_manufacturing)
+        parts_incremental_storage = max(0, parts_required_storage - parts_storage_units_before)
+        if parts_storage_unit_cost > 0:
+            parts_storage_units_purchased = min(parts_incremental_storage, int(cash // parts_storage_unit_cost))
+            parts_storage_paid = parts_storage_units_purchased * parts_storage_unit_cost
+        else:
+            parts_storage_units_purchased = parts_incremental_storage
+            parts_storage_paid = 0.0
+        cash -= parts_storage_paid
+        parts_storage_units_after = parts_storage_units_before + parts_storage_units_purchased
+        parts_inventory_after = min(parts_inventory_after_manufacturing, parts_storage_units_after)
+    else:
+        parts_storage_paid = 0.0
+        parts_storage_units_after = parts_storage_units_before
+        parts_inventory_after = 0
     available_products = inv_before + produced
     cashflow.append(["Material Cost", f"{produced} units x {product_unit_cost:,.0f}", fmt(-material_paid), fmt(cash)])
 
@@ -617,9 +656,11 @@ def settle_player_phase1(
     market_report_price = max(0.0, float(config.get("market_report_price") or 0.0))
     total_market_report_planned = 0.0
     for city_name, city_cfg in city_cfgs.items():
-        pop = float(city_cfg.get("population", 0))
-        pen = float(city_cfg.get("initial_penetration", 0.02))
-        market_size = pop * pen
+        market_size = float(market_size_by_city.get(city_name, 0.0) or 0.0)
+        if market_size <= 0:
+            pop = float(city_cfg.get("population", 0))
+            pen = float(city_cfg.get("initial_penetration", 0.02))
+            market_size = pop * pen
         avg_price = float(city_cfg.get("avg_price", 5000.0))
         agent_delta = int(fv.get(f"{city_name}_agents", 0) or 0)
         if agent_delta > 3:
@@ -731,6 +772,14 @@ def settle_player_phase1(
         cashflow.append(["Quality Investment", f"planned {fmt(q_planned)}", fmt(-quality_paid), fmt(cash)])
     quality_bonus = _quality_yield_bonus(quality_paid)
     pqi = _compute_pqi(quality_paid, inv_before, produced, pqi_w)
+    mgmt_paid = 0.0
+    if has_management:
+        mgmt_paid = min(max(0.0, mgmt_planned), max(0.0, cash))
+        cash -= mgmt_paid
+        if mgmt_paid > 0:
+            cashflow.append(["Management Investment", f"planned {fmt(mgmt_planned)}", fmt(-mgmt_paid), fmt(cash)])
+    total_people = eff_eng
+    mi = (mgmt_paid / total_people) if (has_management and total_people > 0) else 0.0
 
     return {
         "cash_start": cash_start,
@@ -741,18 +790,33 @@ def settle_player_phase1(
         "eng_h": eng_h,
         "eng_f": eng_f,
         "eng_s": eng_s,
+        "workers_now": workers_now,
+        "workers_effective": workers_effective,
+        "worker_salary_now": worker_salary_now,
+        "worker_salary_paid": worker_salary_paid,
         "s_paid": salary_paid,
         "q_paid": quality_paid,
         "q_planned": q_planned,
+        "mgmt_paid": mgmt_paid,
+        "mgmt_planned": mgmt_planned,
         "m_paid": material_paid,
         "bank_delta": bank_delta,
         "vol_planned": vol_planned,
         "eff_vol": effective_volume_input,
         "qb": quality_bonus,
         "cap": report_capacity,
+        "max_products_by_engineers": max_products_by_engineers,
+        "max_products_by_parts": max_products_by_parts,
         "vf": produced,
         "produced": produced,
         "inv_before": inv_before,
+        "parts_inventory_before": parts_inventory_before,
+        "parts_inventory_after": parts_inventory_after,
+        "parts_produced": parts_produced,
+        "parts_storage_units_before": parts_storage_units_before,
+        "parts_storage_units_after": parts_storage_units_after,
+        "parts_storage_paid": parts_storage_paid,
+        "parts_material_paid": parts_material_paid,
         "products_storage_units_before": products_storage_units_before,
         "products_storage_units_after": products_storage_units_after,
         "storage_units_purchased": storage_units_purchased,
@@ -761,6 +825,8 @@ def settle_player_phase1(
         "available_products": available_products,
         "available": available_products,
         "pqi": pqi,
+        "mi": mi,
+        "total_people": total_people,
         "agents_by_city": agents_by_city,
         "base_cpi_by_city": {city: 0.0 for city in city_cfgs},
         "price_by_city": price_by_city,
@@ -770,6 +836,7 @@ def settle_player_phase1(
             for city_name in city_cfgs
         },
         "market_report_paid_total": market_report_paid_total,
+        "market_size_by_city": market_size_by_city,
         "cashflow": cashflow,
         "round_index": round_index,
         "mat_per_unit": mat_per_unit,
@@ -792,6 +859,7 @@ def settle_player_phase2(*, phase1: dict, sold: int, total_revenue: float, confi
     products_storage_units_after = int(phase1.get("products_storage_units_after", products_storage_units_before) or 0)
     storage_units_purchased = int(phase1.get("storage_units_purchased", 0) or 0)
     storage_paid = float(phase1.get("storage_paid", 0.0) or 0.0)
+    parts_storage_paid = float(phase1.get("parts_storage_paid", 0.0) or 0.0)
 
     cash += total_revenue
     cashflow.append(["Sales Revenue", f"{sold} units sold", fmt(total_revenue), fmt(cash)])
@@ -812,9 +880,13 @@ def settle_player_phase2(*, phase1: dict, sold: int, total_revenue: float, confi
     cash_end = cash
     total_cost = (
         phase1["s_paid"]
+        + float(phase1.get("worker_salary_paid", 0.0) or 0.0)
         + phase1["q_paid"]
         + phase1["m_paid"]
+        + float(phase1.get("parts_material_paid", 0.0) or 0.0)
+        + float(phase1.get("mgmt_paid", 0.0) or 0.0)
         + storage_paid
+        + parts_storage_paid
         + interest_paid
         + float(phase1.get("market_report_paid_total", 0.0) or 0.0)
         + sum(phase1.get("sales_prep", {}).get(city, {}).get("marketing_paid", 0) for city in phase1.get("sales_prep", {}))
@@ -830,18 +902,21 @@ def settle_player_phase2(*, phase1: dict, sold: int, total_revenue: float, confi
         "round": phase1["round_index"] + 1,
         "cash": cash_end,
         "debt": debt_after,
-        "workers": 0,
+        "workers": int(phase1.get("workers_now", 0) or 0),
+        "worker_salary": float(phase1.get("worker_salary_now", 0.0) or 0.0),
         "engineers": phase1["eff_eng"],
         "engineer_salary": phase1["eng_s"],
-        "prev_workers": 0,
+        "prev_workers": int(phase1.get("workers_now", 0) or 0),
         "prev_engineers": phase1["eff_eng"],
         "products_inventory": unsold,
         "products_storage_units": products_storage_units_after,
-        "parts_inventory": 0,
+        "parts_inventory": int(phase1.get("parts_inventory_after", 0) or 0),
+        "parts_storage_units": int(phase1.get("parts_storage_units_after", 0) or 0),
         "patent_count": 0,
         "accumulated_research_investment": 0.0,
         "valuation": cash_end,
         "agents_by_city": phase1["agents_by_city"],
+        "market_size_by_city": _advance_city_market_sizes(dict(phase1.get("market_size_by_city", {})), config),
         "prev_round_profit": operating_profit,
     }
     marketing_paid_total = sum(phase1.get("sales_prep", {}).get(city, {}).get("marketing_paid", 0) for city in phase1.get("sales_prep", {}))
@@ -857,6 +932,7 @@ def settle_player_phase2(*, phase1: dict, sold: int, total_revenue: float, confi
         marketing_paid=marketing_paid_total,
         agent_cost_paid=agent_cost_total,
         quality_paid=phase1["q_paid"],
+        management_paid=float(phase1.get("mgmt_paid", 0.0) or 0.0),
         storage_paid=storage_paid,
         interest_due=interest_due,
         cash_end=cash_end,
@@ -883,18 +959,31 @@ def settle_player_phase2(*, phase1: dict, sold: int, total_revenue: float, confi
         "eng_fired": phase1["eng_f"],
         "eng_salary": phase1["eng_s"],
         "salary_paid": phase1["s_paid"],
-        "total_hr_paid": phase1["s_paid"],
+        "worker_salary": phase1.get("worker_salary_now", 0.0),
+        "worker_salary_paid": phase1.get("worker_salary_paid", 0.0),
+        "workers_now": phase1.get("workers_now", 0),
+        "workers_effective": phase1.get("workers_effective", 0),
+        "total_hr_paid": phase1["s_paid"] + float(phase1.get("worker_salary_paid", 0.0) or 0.0),
         "volume_planned": phase1["vol_planned"],
         "quality_paid": phase1["q_paid"],
+        "management_paid": float(phase1.get("mgmt_paid", 0.0) or 0.0),
         "effective_volume_input": phase1["eff_vol"],
         "capacity_limit": phase1["cap"],
+        "max_products_by_engineers": phase1.get("max_products_by_engineers", phase1["cap"]),
+        "max_products_by_parts": phase1.get("max_products_by_parts", phase1["cap"]),
         "volume_final": phase1["vf"],
         "products_inventory_before": phase1["inv_before"],
+        "parts_inventory_before": phase1.get("parts_inventory_before", 0),
+        "parts_inventory_after": phase1.get("parts_inventory_after", 0),
+        "parts_produced": phase1.get("parts_produced", 0),
+        "parts_storage_units_before": phase1.get("parts_storage_units_before", 0),
+        "parts_storage_units_after": phase1.get("parts_storage_units_after", 0),
         "products_produced": phase1["produced"],
         "surplus": unsold,
         "available": phase1["available_products"],
         "material_paid": phase1["m_paid"],
-        "storage_paid": storage_paid,
+        "parts_material_paid": float(phase1.get("parts_material_paid", 0.0) or 0.0),
+        "storage_paid": storage_paid + parts_storage_paid,
         "products_storage_units_before": products_storage_units_before,
         "products_storage_units_after": products_storage_units_after,
         "storage_units_purchased": storage_units_purchased,
@@ -908,6 +997,7 @@ def settle_player_phase2(*, phase1: dict, sold: int, total_revenue: float, confi
         "cpi_by_city": dict(phase1.get("cpi_by_city", {})),
         "market_report_by_city": dict(phase1.get("market_report_by_city", {})),
         "sales_detail_by_city": phase1.get("sales_prep", {}),
+        "market_size_by_city": dict(phase1.get("market_size_by_city", {})),
         "total_cost_paid": total_cost,
         "operating_profit": operating_profit,
         "marketing_paid": marketing_paid_total,

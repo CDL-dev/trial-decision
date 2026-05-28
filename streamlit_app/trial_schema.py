@@ -1,8 +1,8 @@
 """Simplified trial mode input schema and translation helpers."""
 
 TRIAL_DISABLED_MECHANISMS = {
-    "workers": False,
-    "management": False,
+    "workers": True,
+    "management": True,
     "patent": False,
 }
 
@@ -17,9 +17,12 @@ def normalize_trial_submission(payload: dict) -> dict:
     city_sales = payload.get("city_sales") or {}
     normalized: dict[str, float | int] = {
         "bank_amount": float(payload.get("loan") or 0),
+        "workers": int(payload.get("workers_change") or 0),
+        "worker_salary": float(payload.get("worker_salary") or 0),
         "engineers": int(payload.get("engineers_change") or 0),
         "engineer_salary": float(payload.get("engineer_salary") or 0),
         "quality_investment": float(payload.get("quality_investment") or 0),
+        "management_investment": float(payload.get("management_investment") or 0),
         "volume": int(payload.get("volume") or 0),
     }
     for mechanism, enabled in TRIAL_DISABLED_MECHANISMS.items():

@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import streamlit as st
 
+from streamlit_app.engine.models.registry import list_sales_models
 from streamlit_app.services.current_match_service import get_current_match
 from streamlit_app.services.player_service import list_players, count_setup_completed
-from streamlit_app.services.match_service import start_match, delete_match
+from streamlit_app.services.match_service import start_match, delete_match, update_match_config
 
 
 def render(db_path: Path):
@@ -41,6 +43,26 @@ def render(db_path: Path):
     for p in players:
         icon = "✅" if p["setup_completed"] else "⬜"
         st.text(f"{icon} Player {p['player_no']}: {p['company_name'] or '(not set)'} — {p['home_city'] or '(no city)'}")
+
+    st.divider()
+    st.subheader("Experimental Settings")
+    config = json.loads(match["config_json"])
+    model_ids = list_sales_models()
+    current_model = str(config.get("sales_model", "trial_v4m"))
+    if current_model not in model_ids and model_ids:
+        current_model = model_ids[0]
+
+    selected_model = st.selectbox(
+        "CPI / Sales Model",
+        model_ids,
+        index=model_ids.index(current_model) if current_model in model_ids else 0,
+        key="_setup_confirm_sales_model",
+    )
+    if st.button("Save Experimental Settings"):
+        config["sales_model"] = selected_model
+        update_match_config(db_path, match["id"], json.dumps(config))
+        st.success(f"Saved sales model: {selected_model}")
+        st.rerun()
 
     st.divider()
 

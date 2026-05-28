@@ -7,9 +7,12 @@ from streamlit_app.trial_schema import (
 def test_trial_schema_forces_disabled_inputs_to_zero():
     payload = {
         "loan": 1000000,
+        "workers_change": 4,
+        "worker_salary": 6000,
         "engineers_change": 2,
         "engineer_salary": 30000,
         "quality_investment": 50000,
+        "management_investment": 25000,
         "volume": 800,
         "city_sales": {
             "Shanghai": {
@@ -24,13 +27,13 @@ def test_trial_schema_forces_disabled_inputs_to_zero():
     normalized = normalize_trial_submission(payload)
 
     assert TRIAL_DISABLED_MECHANISMS == {
-        "workers": False,
-        "management": False,
+        "workers": True,
+        "management": True,
         "patent": False,
     }
-    assert normalized["workers"] == 0
-    assert normalized["worker_salary"] == 0
-    assert normalized["management_investment"] == 0
+    assert normalized["workers"] == 4
+    assert normalized["worker_salary"] == 6000
+    assert normalized["management_investment"] == 25000
     assert normalized["research_investment"] == 0
     assert normalized["engineers"] == 2
     assert normalized["Shanghai_agents"] == 1
@@ -40,11 +43,13 @@ def test_trial_schema_forces_disabled_inputs_to_zero():
 def test_normalize_trial_submission_empty_payload():
     normalized = normalize_trial_submission({})
     assert normalized["bank_amount"] == 0
+    assert normalized["workers"] == 0
+    assert normalized["worker_salary"] == 0
     assert normalized["engineers"] == 0
     assert normalized["engineer_salary"] == 0
     assert normalized["quality_investment"] == 0
+    assert normalized["management_investment"] == 0
     assert normalized["volume"] == 0
-    assert normalized["workers"] == 0
 
 
 def test_normalize_trial_submission_market_report_false():
@@ -103,10 +108,14 @@ def test_normalize_trial_submission_multiple_cities():
 def test_normalize_trial_submission_none_values():
     payload = {
         "loan": None,
+        "workers_change": None,
+        "worker_salary": None,
         "engineers_change": None,
         "volume": None,
     }
     normalized = normalize_trial_submission(payload)
     assert normalized["bank_amount"] == 0
+    assert normalized["workers"] == 0
+    assert normalized["worker_salary"] == 0
     assert normalized["engineers"] == 0
     assert normalized["volume"] == 0

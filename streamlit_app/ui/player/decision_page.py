@@ -18,9 +18,12 @@ def get_trial_decision_fields() -> list[str]:
     """Return the list of decision fields visible to players in trial mode."""
     return [
         "loan",
+        "workers_change",
+        "worker_salary",
         "engineers_change",
         "engineer_salary",
         "quality_investment",
+        "management_investment",
         "volume",
         "city_sales",
     ]
@@ -31,6 +34,21 @@ def get_current_agents_label(prev_state: dict, city_name: str) -> str:
     agents_by_city = prev_state.get("agents_by_city", {}) if prev_state else {}
     current_agents = int(agents_by_city.get(city_name, 0))
     return f"Currently: {current_agents} agents"
+
+
+def get_current_workers_label(prev_state: dict) -> str:
+    """Return the current worker label from the previous state."""
+    current_workers = int(prev_state.get("workers", 0)) if prev_state else 0
+    return f"Currently: {current_workers} workers"
+
+
+def get_default_worker_salary(prev_state: dict, config: dict) -> int:
+    """Return the worker salary input default, preferring previous state over config."""
+    if prev_state:
+        prev_worker_salary = float(prev_state.get("worker_salary", 0) or 0)
+        if prev_worker_salary > 0:
+            return int(prev_worker_salary)
+    return int(config.get("initial_worker_salary", 3000))
 
 
 def render(db_path: Path):
@@ -78,12 +96,17 @@ def render(db_path: Path):
             max_loan = float(home_cfg.get("max_loan", 0))
             st.caption(f"Max loan: {fmt_money(max_loan)}")
             loan = st.number_input("Loan", min_value=0, max_value=int(max_loan) if max_loan > 0 else None, value=0, step=100000)
+            st.caption(get_current_workers_label(prev_state))
+            workers_change = st.number_input("Workers Change", value=0)
+            worker_salary_min = int(config.get("worker_salary_min", 1000))
+            worker_salary = st.number_input("Worker Salary", min_value=worker_salary_min, value=get_default_worker_salary(prev_state, config), step=500)
             st.caption(f"Currently: {current_eng} engineers")
             engineers_change = st.number_input("Engineers Change", value=0)
             salary_min = int(config.get("engineer_salary_min", 1000))
             engineer_salary = st.number_input("Engineer Salary", min_value=salary_min, value=5000, step=500)
         with col2:
             quality_investment = st.number_input("Quality Investment", min_value=0, value=0, step=10000)
+            management_investment = st.number_input("Management Investment", min_value=0, value=0, step=10000)
             volume = st.number_input("Production Volume", min_value=0, value=100, step=100)
 
         st.divider()
@@ -110,9 +133,12 @@ def render(db_path: Path):
         if submitted:
             payload = {
                 "loan": loan,
+                "workers_change": workers_change,
+                "worker_salary": worker_salary,
                 "engineers_change": engineers_change,
                 "engineer_salary": engineer_salary,
                 "quality_investment": quality_investment,
+                "management_investment": management_investment,
                 "volume": volume,
                 "city_sales": city_sales,
             }

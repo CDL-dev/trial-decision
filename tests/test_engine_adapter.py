@@ -1,6 +1,51 @@
 """Test the engine adapter — verify settle_round produces real settlement output."""
 
 from streamlit_app.engine.adapter import settle_round, load_config
+from streamlit_app.engine.models.registry import get_sales_model, list_sales_models
+from streamlit_app.engine.models.trial_v4m import TrialV4MSalesModel
+
+
+def test_get_sales_model_returns_trial_v4m_instance():
+    """Registry should construct the bundled trial_v4m sales model."""
+    sales_model = get_sales_model("trial_v4m")
+
+    assert isinstance(sales_model, TrialV4MSalesModel)
+
+
+def test_get_sales_model_raises_key_error_for_unknown_name():
+    """Registry should surface unknown model names in the KeyError."""
+    unknown_name = "unknown_model"
+
+    try:
+        get_sales_model(unknown_name)
+    except KeyError as exc:
+        assert unknown_name in str(exc)
+    else:
+        raise AssertionError("Expected KeyError for unknown sales model")
+
+
+def test_list_sales_models_returns_public_model_ids():
+    model_ids = list_sales_models()
+
+    assert "trial_v4m" in model_ids
+    assert "expv1" in model_ids
+
+
+def test_load_config_preserves_sales_model_field_from_preset():
+    """load_config should pass through the preset sales_model field unchanged."""
+    config = load_config("JR")
+
+    assert config["sales_model"] == "trial_v4m"
+
+
+def test_load_config_preserves_admin_setup_limits():
+    """load_config should pass through preset-driven admin limits unchanged."""
+    config = load_config("JR")
+
+    assert config["admin_player_count_min"] == 1
+    assert config["admin_player_count_max"] == 20
+    assert config["admin_round_count_min"] == 1
+    assert config["admin_round_count_max"] == 6
 
 
 def test_settle_round_produces_structured_output():
