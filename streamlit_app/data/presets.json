@@ -1,5 +1,10 @@
 {
   "JR": {
+    "sales_model": "trial_v4m",
+    "admin_player_count_min": 1,
+    "admin_player_count_max": 20,
+    "admin_round_count_min": 1,
+    "admin_round_count_max": 6,
     "match_name": "JR test1",
     "total_rounds": 4,
     "minutes_per_round": 45,
@@ -147,6 +152,11 @@
     "product_price_max": 25000.0
   },
   "111516": {
+    "sales_model": "trial_v4m",
+    "admin_player_count_min": 1,
+    "admin_player_count_max": 20,
+    "admin_round_count_min": 1,
+    "admin_round_count_max": 6,
     "match_name": "?North JR?11.15-16 Beijing Huijia Private School",
     "total_rounds": 4,
     "minutes_per_round": 45,
@@ -316,6 +326,11 @@
     "settle_immediately_on_all_submit": true
   },
   "OBOS": {
+    "sales_model": "trial_v4m",
+    "admin_player_count_min": 1,
+    "admin_player_count_max": 20,
+    "admin_round_count_min": 1,
+    "admin_round_count_max": 6,
     "match_name": "【OBOS】",
     "total_rounds": 4,
     "minutes_per_round": 45,

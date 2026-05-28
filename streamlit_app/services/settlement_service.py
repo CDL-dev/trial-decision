@@ -123,18 +123,26 @@ def _build_default_submission(config: dict, prev_state: dict | None = None) -> d
             "market_report": False,
         }
 
-    default_salary = float(config.get("initial_engineer_salary", 5000))
+    default_worker_salary = float(config.get("initial_worker_salary", 3000))
+    default_engineer_salary = float(config.get("initial_engineer_salary", 5000))
     if prev_state:
+        prev_workers = int(prev_state.get("workers", 0))
+        prev_worker_salary = float(prev_state.get("worker_salary", 0))
         prev_eng = int(prev_state.get("engineers", 0))
-        prev_sal = float(prev_state.get("engineer_salary", 0))
-        if prev_eng > 0 and prev_sal > 0:
-            default_salary = prev_sal
+        prev_engineer_salary = float(prev_state.get("engineer_salary", 0))
+        if prev_workers > 0 and prev_worker_salary > 0:
+            default_worker_salary = prev_worker_salary
+        if prev_eng > 0 and prev_engineer_salary > 0:
+            default_engineer_salary = prev_engineer_salary
 
     return {
         "loan": 0,
+        "workers_change": 0,
+        "worker_salary": default_worker_salary,
         "engineers_change": 0,
-        "engineer_salary": default_salary,
+        "engineer_salary": default_engineer_salary,
         "quality_investment": 0,
+        "management_investment": 0,
         "volume": 0,
         "city_sales": city_sales,
     }

@@ -4,6 +4,7 @@
 - Basic UI based on streamlit
 - Basic Compute function
 - Expendable opensource multi-player CPI module
+- Replaceable public sales/CPI model architecture
 
 ## Run Locally
 ```bash

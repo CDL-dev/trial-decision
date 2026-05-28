@@ -16,11 +16,20 @@ from streamlit_app.ui.shared.key_data import render_key_data
 def get_default_setup_form() -> dict:
     return {
         "player_count": 3,
-        "round_count": 5,
+        "round_count": 4,
         "worker_mechanism": False,
         "management_mechanism": False,
         "patent_mechanism": False,
         "engineer_mechanism": True,
+    }
+
+
+def get_setup_limits(config: dict) -> dict:
+    return {
+        "player_count_min": int(config.get("admin_player_count_min", 1)),
+        "player_count_max": int(config.get("admin_player_count_max", 8)),
+        "round_count_min": int(config.get("admin_round_count_min", 1)),
+        "round_count_max": int(config.get("admin_round_count_max", 12)),
     }
 
 
@@ -51,14 +60,33 @@ def render(db_path: Path):
     # Key Data in main content area
     try:
         config_preview = load_config(preset_key)
+        setup_limits = get_setup_limits(config_preview)
         render_key_data(config_preview)
     except Exception:
         st.warning("Could not load preset data.")
+        config_preview = None
+        setup_limits = get_setup_limits({})
 
     with st.form("create_match_form"):
         name = st.text_input("Match Name", value="Match")
-        player_count = st.selectbox("Players", [1, 2, 3], index=2)
-        round_count = st.number_input("Rounds", min_value=1, max_value=3, value=3)
+        default_form = get_default_setup_form()
+        default_player_count = int(config_preview.get("player_count", default_form["player_count"])) if config_preview else default_form["player_count"]
+        default_round_count = int(config_preview.get("total_rounds", default_form["round_count"])) if config_preview else default_form["round_count"]
+
+        player_count = st.number_input(
+            "Players",
+            min_value=setup_limits["player_count_min"],
+            max_value=setup_limits["player_count_max"],
+            value=min(max(default_player_count, setup_limits["player_count_min"]), setup_limits["player_count_max"]),
+            step=1,
+        )
+        round_count = st.number_input(
+            "Rounds",
+            min_value=setup_limits["round_count_min"],
+            max_value=setup_limits["round_count_max"],
+            value=min(max(default_round_count, setup_limits["round_count_min"]), setup_limits["round_count_max"]),
+            step=1,
+        )
 
         submitted = st.form_submit_button("Create Match")
 

@@ -26,9 +26,12 @@ def can_settle_round(db_path: Path, match_id: int, round_index: int) -> bool:
 
 SUBMISSION_BUSINESS_FIELDS = {
     "loan",
+    "workers_change",
+    "worker_salary",
     "engineers_change",
     "engineer_salary",
     "quality_investment",
+    "management_investment",
     "volume",
     "city_sales",
 }

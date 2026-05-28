@@ -46,6 +46,18 @@ def start_match(db_path: Path, match_id: int) -> None:
         conn.close()
 
 
+def update_match_config(db_path: Path, match_id: int, config_json: str) -> None:
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE matches SET config_json = ? WHERE id = ?",
+            (config_json, match_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def advance_round(db_path: Path, match_id: int) -> None:
     conn = sqlite3.connect(db_path)
     try:

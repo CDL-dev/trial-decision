@@ -2,6 +2,8 @@
 
 from streamlit_app.ui.player.decision_page import (
     get_current_agents_label,
+    get_current_workers_label,
+    get_default_worker_salary,
     get_trial_decision_fields,
 )
 from streamlit_app.ui.player.report_page import (
@@ -11,14 +13,14 @@ from streamlit_app.ui.player.report_page import (
 )
 
 
-def test_player_decision_fields_exclude_worker_management_and_patent():
-    """Verify trial decision fields include player-facing fields only."""
+def test_player_decision_fields_include_worker_and_management_but_exclude_patent():
+    """Verify trial decision fields include worker reconnect inputs but not patent fields."""
     fields = get_trial_decision_fields()
     assert "loan" in fields
+    assert "workers_change" in fields
+    assert "worker_salary" in fields
     assert "engineers_change" in fields
-    assert "worker_salary" not in fields
-    assert "workers_change" not in fields
-    assert "management_cost" not in fields
+    assert "management_investment" in fields
     assert "research_and_development_cost" not in fields
 
 
@@ -34,6 +36,24 @@ def test_current_agents_label_uses_previous_city_state():
     assert get_current_agents_label(prev_state, "Guangzhou") == "Currently: 0 agents"
 
 
+def test_current_workers_label_uses_previous_state():
+    """Global worker reconnect should show current worker count from previous state."""
+    prev_state = {
+        "workers": 12,
+    }
+    assert get_current_workers_label(prev_state) == "Currently: 12 workers"
+    assert get_current_workers_label({}) == "Currently: 0 workers"
+
+
+def test_default_worker_salary_prefers_previous_state_over_initial_config():
+    """Worker salary input should carry forward previous state before falling back to config."""
+    config = {"initial_worker_salary": 3000}
+    prev_state = {"worker_salary": 6200}
+
+    assert get_default_worker_salary(prev_state, config) == 6200
+    assert get_default_worker_salary({}, config) == 3000
+
+
 def test_build_production_rows_only_keeps_surplus_not_inventory_lines():
     """Production display should keep surplus and drop duplicate inventory rows."""
     report = {
@@ -47,6 +67,19 @@ def test_build_production_rows_only_keeps_surplus_not_inventory_lines():
     rows = build_production_rows(report)
     labels = [row[""] for row in rows]
     assert labels == ["Volume Planned", "Produced", "Sold", "Surplus"]
+
+
+def test_build_production_rows_includes_parts():
+    """Production display should include parts output when provided by report."""
+    report = {
+        "volume_planned": 100,
+        "parts_produced": 700,
+        "products_produced": 56,
+        "products_sold": 40,
+        "surplus": 16,
+    }
+    rows = build_production_rows(report)
+    assert {"": "Parts Produced", "Units": 700} in rows
 
 
 def test_build_cashflow_table_rows_preserves_trial_report_columns():

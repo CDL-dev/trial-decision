@@ -31,12 +31,19 @@ def build_cashflow_table_rows(cashflow_table: list[list]) -> list[dict]:
 
 def build_production_rows(report: dict) -> list[dict]:
     """Build production rows for the player report."""
-    return [
+    rows = [
         {"": "Volume Planned", "Units": report.get("volume_planned", 0)},
-        {"": "Produced", "Units": report.get("products_produced", 0)},
-        {"": "Sold", "Units": report.get("products_sold", 0)},
-        {"": "Surplus", "Units": report.get("surplus", 0)},
     ]
+    if "parts_produced" in report:
+        rows.append({"": "Parts Produced", "Units": report.get("parts_produced", 0)})
+    rows.extend(
+        [
+            {"": "Produced", "Units": report.get("products_produced", 0)},
+            {"": "Sold", "Units": report.get("products_sold", 0)},
+            {"": "Surplus", "Units": report.get("surplus", 0)},
+        ]
+    )
+    return rows
 
 
 def build_market_report_sections(report: dict) -> list[dict]:
@@ -107,6 +114,12 @@ def render_report_content(
     ]
     st.dataframe(hr_data, width="stretch", hide_index=True)
     st.caption(f"Salary/mo: {fmt_money(report.get('eng_salary', 0))}    |    Salary Paid: {fmt_money(report.get('salary_paid', 0))}")
+    if "workers_now" in report or "workers_effective" in report:
+        st.caption(
+            f"Workers: {report.get('workers_now', 0)}    |    "
+            f"Effective Workers: {report.get('workers_effective', 0)}    |    "
+            f"Worker Salary Paid: {fmt_money(report.get('worker_salary_paid', 0))}"
+        )
 
     st.divider()
     st.subheader("Production")
@@ -115,8 +128,10 @@ def render_report_content(
     st.caption(
         f"PQI: {pqi:,.2f}    |    "
         f"Material Paid: {fmt_money(report.get('material_paid', 0))}    |    "
+        f"Parts Material Paid: {fmt_money(report.get('parts_material_paid', 0))}    |    "
         f"Storage Paid: {fmt_money(report.get('storage_paid', 0))}    |    "
-        f"Storage Units: {report.get('products_storage_units_before', 0)} -> {report.get('products_storage_units_after', 0)}"
+        f"Storage Units: {report.get('products_storage_units_before', 0)} -> {report.get('products_storage_units_after', 0)}    |    "
+        f"Parts Inv: {report.get('parts_inventory_before', 0)} -> {report.get('parts_inventory_after', 0)}"
     )
 
     st.divider()
