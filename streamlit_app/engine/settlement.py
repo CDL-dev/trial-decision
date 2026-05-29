@@ -234,6 +234,7 @@ def _build_market_report_snapshot(team_states: list[dict], cities_config: list[d
                     "agents": int(peer_sales.get("agents_now", 0) or 0),
                     "marketing": float(peer_sales.get("marketing_paid", 0.0) or 0.0),
                     "pqi": float(peer.get("pqi", 0.0) or 0.0),
+                    "management_index": float(peer.get("mi", 0.0) or 0.0),
                     "sold": int(peer.get("sold_by_city", {}).get(city_name, 0) or 0),
                     "revenue": float(peer.get("revenue_by_city", {}).get(city_name, 0.0) or 0.0),
                     "market_share": float(peer.get("market_share_by_city", {}).get(city_name, 0.0) or 0.0),
@@ -335,6 +336,10 @@ def allocate_trial_v4m(team_states: list[dict], config: dict) -> list[dict]:
         team["cpi_by_city"] = {city: 0.0 for city in city_names}
         team["base_cpi_by_city"] = {city: 0.0 for city in city_names}
         team["total_sold_allocated"] = 0
+        team["mi_idx"] = {city: 0.0 for city in city_names}
+        team["price_idx"] = {city: 0.0 for city in city_names}
+        team["spi_idx"] = {city: 0.0 for city in city_names}
+        team["pqi_idx"] = {city: 0.0 for city in city_names}
 
     rounded_sales_by_team: dict[int, dict[str, int]] = {
         int(team["player_id"]): {city: 0 for city in city_names} for team in team_states
@@ -387,6 +392,13 @@ def allocate_trial_v4m(team_states: list[dict], config: dict) -> list[dict]:
             base_cpi = float(team_result.base_cpi or 0.0)
             team["cpi_by_city"][city_name] = base_cpi
             team["base_cpi_by_city"][city_name] = base_cpi
+            debug = team_result.debug if isinstance(team_result.debug, dict) else {}
+            if "mi_idx" not in team:
+                team["mi_idx"] = {}
+            team["mi_idx"][city_name] = float(debug.get("mi_idx", 0.0) or 0.0)
+            team["price_idx"][city_name] = float(debug.get("price_idx", 0.0) or 0.0)
+            team["spi_idx"][city_name] = float(debug.get("spi_idx", 0.0) or 0.0)
+            team["pqi_idx"][city_name] = float(debug.get("pqi_idx", 0.0) or 0.0)
 
     for team in team_states:
         player_id = int(team["player_id"])
@@ -779,6 +791,8 @@ def settle_player_phase1(
         if mgmt_paid > 0:
             cashflow.append(["Management Investment", f"planned {fmt(mgmt_planned)}", fmt(-mgmt_paid), fmt(cash)])
     total_people = eff_eng
+    if has_workers:
+        total_people += workers_effective
     mi = (mgmt_paid / total_people) if (has_management and total_people > 0) else 0.0
 
     return {

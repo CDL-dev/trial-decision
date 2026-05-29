@@ -41,7 +41,7 @@ def render(db_path: Path):
         return
 
     created_players = st.session_state.get("created_players")
-    if created_players:
+    if created_players and has_active_match(db_path):
         st.success("Match created!")
         st.subheader("Player Credentials")
         for p in created_players:

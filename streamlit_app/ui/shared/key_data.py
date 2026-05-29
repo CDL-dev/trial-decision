@@ -90,7 +90,7 @@ def render_mechanics(config: dict):
 
 def render_key_data(config: dict):
     """Full key data panel for admin and player pages."""
-    with st.expander("Key Data - Game Parameters", expanded=False):
+    with st.expander("Key Data - Game Parameters", expanded=True):
         st.subheader("City Parameters")
         render_city_table(config)
 

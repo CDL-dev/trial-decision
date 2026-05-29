@@ -37,10 +37,20 @@ def render(db_path: Path):
         players = list_players(db_path, match_id)
         st.metric("Players", len(players))
 
-    if st.button("Refresh Status"):
-        st.rerun()
-
-    # Player credentials drawer
+    col_refresh, col_settle = st.columns([1, 3])
+    with col_refresh:
+        if st.button("Refresh Status"):
+            st.rerun()
+    with col_settle:
+        can_settle = can_settle_round(db_path, match_id, current_round)
+        if not can_settle:
+            st.info("Waiting for at least one submission before settlement.")
+        else:
+            if st.button("Execute Settlement", type="primary", use_container_width=True):
+                with st.spinner("Settling round..."):
+                    settle_current_round(db_path, match_id)
+                st.success(f"Round {current_round} settled!")
+                st.rerun()
     with st.sidebar:
         with st.expander("Player Credentials", expanded=False):
             for p in players:
@@ -71,20 +81,8 @@ def render(db_path: Path):
         else:
             st.text(f"⬜ Player {p['player_no']} — {p['company_name']} — not submitted")
 
-    st.divider()
-
-    can_settle = can_settle_round(db_path, match_id, current_round)
-    if not can_settle:
-        st.info("Waiting for at least one submission before settlement.")
-    else:
-        if st.button("Execute Settlement", type="primary"):
-            with st.spinner("Settling round..."):
-                settle_current_round(db_path, match_id)
-            st.success(f"Round {current_round} settled!")
-            st.rerun()
-
-        # Show last round summary if available
-        if current_round > 1:
+    # Show last round summary if available
+    if current_round > 1:
             st.divider()
             st.subheader(f"Round {current_round - 1} Summary")
             conn = __import__("sqlite3").connect(db_path)
@@ -108,5 +106,6 @@ def render(db_path: Path):
         confirmed = st.checkbox("I confirm I want to delete this match and all its data")
         if st.button("Delete Match", type="secondary", disabled=not confirmed):
             delete_match(db_path, match_id)
+            st.session_state.pop("created_players", None)
             st.success("Match deleted. Create a new match to continue.")
             st.rerun()

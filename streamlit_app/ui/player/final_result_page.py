@@ -112,7 +112,6 @@ def _render_report_history(player: dict, reports: list[dict]) -> None:
                 report=item["report"],
                 company_name=player["company_name"],
                 report_round=item["round_index"],
-                show_navigation=False,
             )
 
 

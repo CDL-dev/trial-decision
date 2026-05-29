@@ -152,7 +152,6 @@ def render_report_content(
     report: dict,
     company_name: str,
     report_round: int,
-    show_navigation: bool,
 ) -> None:
     """Render one round report from saved summary/report payloads."""
     st.subheader(f"{company_name} - Round {report_round} Report")
@@ -188,6 +187,11 @@ def render_report_content(
     ]
     if "workers_now" in report or "workers_effective" in report:
         hr_notes.insert(0, f"Worker Salary Paid: {fmt_money(report.get('worker_salary_paid', 0))}")
+    management_paid = float(report.get("management_paid", 0) or 0)
+    if management_paid > 0:
+        total_people = int(report.get("eng_effective", 0) or 0) + int(report.get("workers_effective", 0) or 0)
+        if total_people > 0:
+            hr_notes.append(f"MI: {management_paid / total_people:,.2f}")
     st.caption(" | ".join(hr_notes))
 
     st.divider()
@@ -217,13 +221,6 @@ def render_report_content(
         for section in market_report_sections:
             st.markdown(f"**{section['city']}**")
             st.dataframe(section["rows"], width="stretch", hide_index=True)
-
-    if show_navigation:
-        st.divider()
-        if st.button("Go to Decision"):
-            st.session_state["_switch_to_decision"] = True
-            st.rerun()
-
 
 def render(db_path: Path):
     st.header("Round Report")
@@ -255,5 +252,4 @@ def render(db_path: Path):
         report=json.loads(row["report_json"]),
         company_name=player["company_name"],
         report_round=report_round,
-        show_navigation=match["status"] != "ended",
     )

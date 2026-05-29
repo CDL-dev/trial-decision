@@ -99,6 +99,7 @@ def _render_admin():
                 confirmed = st.checkbox("I confirm I want to delete this match and all its data")
                 if st.button("Delete Match", type="secondary", disabled=not confirmed):
                     delete_match(DB_PATH, match["id"])
+                    st.session_state.pop("created_players", None)
                     st.success("Match deleted. Create a new match to continue.")
                     st.rerun()
         # Show final results

@@ -363,6 +363,10 @@ class TrialV4MSalesModel:
                         "score": float(detail.get("score") or 0.0),
                         "uptake": float(uptake),
                         "city_total_demand": float(city_total_demand),
+                        "mi_idx": float(detail.get("mi_idx") or 0.0),
+                        "price_idx": float(detail.get("price_idx") or 0.0),
+                        "spi_idx": float(detail.get("spi_idx") or 0.0),
+                        "pqi_idx": float(detail.get("pqi_idx") or 0.0),
                     },
                 )
             )

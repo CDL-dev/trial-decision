@@ -340,7 +340,8 @@ def test_market_report_snapshot_is_saved_for_ordered_city_only():
     assert market_report["Chongqing"]["ordered"] is False
     assert market_report["Shenzhen"]["teams"][0]["company_name"] == "Alpha"
     assert set(market_report["Shenzhen"]["teams"][0]) == {
-        "company_name", "price", "agents", "marketing", "pqi", "sold", "revenue", "market_share",
+        "company_name", "price", "agents", "marketing", "pqi", "management_index",
+        "sold", "revenue", "market_share",
     }
     assert market_report["Shenzhen"]["teams"][0]["pqi"] > 0
 

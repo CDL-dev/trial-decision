@@ -86,48 +86,74 @@ def render(db_path: Path):
 
     current_eng = int(prev_state.get("engineers", 0)) if prev_state else 0
 
+    has_workers = bool(config.get("has_workers_mechanism", False))
+    has_management = bool(config.get("has_management_mechanism", False))
+
     with st.form("decision_form"):
-        st.subheader("Global Decisions")
-        col1, col2 = st.columns(2)
-        with col1:
+        # --- Bank Loan ---
+        with st.expander("Bank Loan", expanded=True):
             home_cfg = next(
                 (c for c in cities_config if c.get("name") == player["home_city"]), {}
             )
             max_loan = float(home_cfg.get("max_loan", 0))
             st.caption(f"Max loan: {fmt_money(max_loan)}")
-            loan = st.number_input("Loan", min_value=0, max_value=int(max_loan) if max_loan > 0 else None, value=0, step=100000)
-            st.caption(get_current_workers_label(prev_state))
-            workers_change = st.number_input("Workers Change", value=0)
-            worker_salary_min = int(config.get("worker_salary_min", 1000))
-            worker_salary = st.number_input("Worker Salary", min_value=worker_salary_min, value=get_default_worker_salary(prev_state, config), step=500)
-            st.caption(f"Currently: {current_eng} engineers")
-            engineers_change = st.number_input("Engineers Change", value=0)
-            salary_min = int(config.get("engineer_salary_min", 1000))
-            engineer_salary = st.number_input("Engineer Salary", min_value=salary_min, value=5000, step=500)
-        with col2:
-            quality_investment = st.number_input("Quality Investment", min_value=0, value=0, step=10000)
-            management_investment = st.number_input("Management Investment", min_value=0, value=0, step=10000)
-            volume = st.number_input("Production Volume", min_value=0, value=100, step=100)
+            loan = st.number_input("Amount", min_value=0, max_value=int(max_loan) if max_loan > 0 else None, value=0, step=100000)
 
+        # --- Human Resource ---
+        with st.expander("Human Resource", expanded=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                if has_workers:
+                    st.caption(get_current_workers_label(prev_state))
+                    workers_change = st.number_input("Workers Change", value=0)
+                else:
+                    workers_change = 0
+            with col2:
+                if has_workers:
+                    worker_salary_min = int(config.get("worker_salary_min", 1000))
+                    worker_salary = st.number_input("Worker Salary", min_value=worker_salary_min, value=get_default_worker_salary(prev_state, config), step=500)
+                else:
+                    worker_salary = int(config.get("initial_worker_salary", 3000))
+            col1, col2 = st.columns(2)
+            with col1:
+                st.caption(f"Currently: {current_eng} engineers")
+                engineers_change = st.number_input("Engineers Change", value=0)
+            with col2:
+                salary_min = int(config.get("engineer_salary_min", 1000))
+                engineer_salary = st.number_input("Engineer Salary", min_value=salary_min, value=5000, step=500)
+            if has_management:
+                management_investment = st.number_input("Management Investment", min_value=0, value=0, step=10000)
+            else:
+                management_investment = 0
+
+        # --- Production ---
+        with st.expander("Production", expanded=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                volume = st.number_input("Volume", min_value=0, value=100, step=100)
+            with col2:
+                quality_investment = st.number_input("Quality Investment", min_value=0, value=0, step=10000)
+
+        # --- Per-City Sales ---
         st.divider()
-        st.subheader("Per-City Decisions")
         city_sales = {}
-        for city in cities_config:
+        for i, city in enumerate(cities_config):
             name = city.get("name", "")
-            st.markdown(f"**{name}**")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.caption(get_current_agents_label(prev_state, name))
-                agents = st.number_input(f"Agents", min_value=-5, max_value=20, value=0, key=f"agents_{name}")
-                marketing = st.number_input(f"Marketing", min_value=0, value=0, step=10000, key=f"mkt_{name}")
-            with c2:
-                avg_price = float(city.get("avg_price", 5000))
-                price = st.number_input(f"Price", min_value=1, value=int(avg_price), step=100, key=f"price_{name}")
-                market_report = st.checkbox(f"Market Report", value=False, key=f"report_{name}")
-            city_sales[name] = {
-                "agents": agents, "marketing": marketing,
-                "price": price, "market_report": market_report,
-            }
+            is_home = name == player["home_city"]
+            with st.expander(f"Sales — {name}", expanded=is_home or len(cities_config) <= 2):
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.caption(get_current_agents_label(prev_state, name))
+                    agents = st.number_input("Sales Agent", min_value=-5, max_value=20, value=0, key=f"agents_{name}")
+                    marketing = st.number_input("Marketing Investment", min_value=0, value=0, step=10000, key=f"mkt_{name}")
+                with c2:
+                    avg_price = float(city.get("avg_price", 5000))
+                    price = st.number_input("Price", min_value=1, value=int(avg_price), step=100, key=f"price_{name}")
+                    market_report = st.checkbox("Order Market Report", value=False, key=f"report_{name}")
+                city_sales[name] = {
+                    "agents": agents, "marketing": marketing,
+                    "price": price, "market_report": market_report,
+                }
 
         submitted = st.form_submit_button("Submit Decision")
         if submitted:

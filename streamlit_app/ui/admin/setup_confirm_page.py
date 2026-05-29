@@ -29,8 +29,18 @@ def render(db_path: Path):
 
     st.markdown(f"**Setup completed: {completed}/{len(players)}**")
 
-    if st.button("Refresh Status"):
-        st.rerun()
+    col_refresh, col_start = st.columns([1, 3])
+    with col_refresh:
+        if st.button("Refresh Status"):
+            st.rerun()
+    with col_start:
+        if completed > 0:
+            if st.button("Start Match", type="primary", use_container_width=True):
+                start_match(db_path, match["id"])
+                st.success("Match started! Round 1 begins.")
+                st.rerun()
+        else:
+            st.error("At least 1 player must complete setup before starting.")
 
     st.divider()
     st.subheader("Player Credentials")
@@ -66,14 +76,6 @@ def render(db_path: Path):
 
     st.divider()
 
-    if completed == 0:
-        st.error("At least 1 player must complete setup before starting.")
-    else:
-        if st.button("Start Match", type="primary"):
-            start_match(db_path, match["id"])
-            st.success("Match started! Round 1 begins.")
-            st.rerun()
-
     # Danger zone
     st.divider()
     with st.expander("Danger Zone", expanded=False):
@@ -81,5 +83,6 @@ def render(db_path: Path):
         confirmed = st.checkbox("I confirm I want to delete this match and all its data")
         if st.button("Delete Match", type="secondary", disabled=not confirmed):
             delete_match(db_path, match["id"])
+            st.session_state.pop("created_players", None)
             st.success("Match deleted. Create a new match to continue.")
             st.rerun()
