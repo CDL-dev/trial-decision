@@ -1,18 +1,5 @@
 """Simplified trial mode input schema and translation helpers."""
 
-TRIAL_DISABLED_MECHANISMS = {
-    "workers": True,
-    "management": True,
-    "patent": False,
-}
-
-_DISABLED_FIELDS = {
-    "workers": ("workers", "worker_salary"),
-    "management": ("management_investment",),
-    "patent": ("research_investment",),
-}
-
-
 def normalize_trial_submission(payload: dict) -> dict:
     city_sales = payload.get("city_sales") or {}
     normalized: dict[str, float | int] = {
@@ -23,12 +10,10 @@ def normalize_trial_submission(payload: dict) -> dict:
         "engineer_salary": float(payload.get("engineer_salary") or 0),
         "quality_investment": float(payload.get("quality_investment") or 0),
         "management_investment": float(payload.get("management_investment") or 0),
+        # ponytail: keep the legacy compatibility field at zero until all callers forget it.
+        "research_investment": 0,
         "volume": int(payload.get("volume") or 0),
     }
-    for mechanism, enabled in TRIAL_DISABLED_MECHANISMS.items():
-        if not enabled:
-            for field in _DISABLED_FIELDS.get(mechanism, ()):
-                normalized[field] = 0
     for city_name, city_payload in city_sales.items():
         normalized[f"{city_name}_agents"] = int(city_payload.get("agents") or 0)
         normalized[f"{city_name}_marketing"] = float(city_payload.get("marketing") or 0)

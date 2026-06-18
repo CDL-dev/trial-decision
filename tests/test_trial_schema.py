@@ -1,10 +1,7 @@
-from streamlit_app.trial_schema import (
-    TRIAL_DISABLED_MECHANISMS,
-    normalize_trial_submission,
-)
+from streamlit_app.trial_schema import normalize_trial_submission
 
 
-def test_trial_schema_forces_disabled_inputs_to_zero():
+def test_trial_schema_keeps_legacy_research_field_zero():
     payload = {
         "loan": 1000000,
         "workers_change": 4,
@@ -26,11 +23,6 @@ def test_trial_schema_forces_disabled_inputs_to_zero():
 
     normalized = normalize_trial_submission(payload)
 
-    assert TRIAL_DISABLED_MECHANISMS == {
-        "workers": True,
-        "management": True,
-        "patent": False,
-    }
     assert normalized["workers"] == 4
     assert normalized["worker_salary"] == 6000
     assert normalized["management_investment"] == 25000
