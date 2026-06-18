@@ -6,6 +6,7 @@ __pycache__/
 .playwright-cli/
 agenthandoff/
 docs/superpowers/
+docs/sim_clone-tech-debt-2026-05-29.md
 data/
 *.db
 tests/test_sim_clone_parity_local.py
