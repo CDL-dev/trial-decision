@@ -498,10 +498,16 @@ def settle_player_phase1(
 
     eng_target = max(0, cur_eng + eng_d)
     salary_cost_full = eng_target * eng_s * months
-    salary_paid = min(salary_cost_full, cash)
+    engineer_hr_shortfall = max(0.0, salary_cost_full - cash)
+    if engineer_hr_shortfall > 0:
+        debt += engineer_hr_shortfall
+        bank_delta += engineer_hr_shortfall
+        cashflow.append(["Loan", "auto for HR cost", fmt(engineer_hr_shortfall), fmt(cash + engineer_hr_shortfall)])
+        cash += engineer_hr_shortfall
+    salary_paid = salary_cost_full
     cash -= salary_paid
     requested_engineer_salary = max(float(fv.get("engineer_salary", 0) or 0), 0.0)
-    post_ratio = min(1.0, salary_paid / salary_cost_full) if salary_cost_full > 0 else 1.0
+    post_ratio = 1.0 if salary_cost_full > 0 else 1.0
     if requested_engineer_salary > 0 and post_ratio < 1.0:
         eng_s = round(requested_engineer_salary * post_ratio, 4)
         eng_s = max(0.0, min(s_max, eng_s))
@@ -545,10 +551,16 @@ def settle_player_phase1(
     if has_workers:
         workers_target = max(0, cur_workers + worker_d)
         worker_salary_cost_full = workers_target * worker_s * months
-        worker_salary_paid = min(worker_salary_cost_full, cash)
+        worker_hr_shortfall = max(0.0, worker_salary_cost_full - cash)
+        if worker_hr_shortfall > 0:
+            debt += worker_hr_shortfall
+            bank_delta += worker_hr_shortfall
+            cashflow.append(["Loan", "auto for HR cost", fmt(worker_hr_shortfall), fmt(cash + worker_hr_shortfall)])
+            cash += worker_hr_shortfall
+        worker_salary_paid = worker_salary_cost_full
         cash -= worker_salary_paid
         if worker_salary_cost_full > 0:
-            workers_effective = int(workers_target * (worker_salary_paid / worker_salary_cost_full))
+            workers_effective = workers_target
         workers_now = workers_target
         cashflow.append(
             ["Worker Salary", f"{workers_effective}/{workers_now} workers x {worker_s:,.0f}/mo x {months:.0f}mo", fmt(-worker_salary_paid), fmt(cash)]

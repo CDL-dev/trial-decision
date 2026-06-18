@@ -166,15 +166,15 @@ def test_engineer_salary_cost_multiplies_months_per_round():
 # ── 4. Cash-sensitive: low cash prevents full production ─────────────
 
 def test_cash_sensitive_low_cash_limits_production():
-    """¥1000 cash should not produce 56 products with 6 engineers."""
+    """Low cash should no longer cut HR; it should still block later material spend."""
     config = _jr_config()
     state = _state(config, cash=1000, engineers=6, engineer_salary=8000)
     fv = _base_fv()
     fv["volume"] = 500
     result = settle(fv=fv, config=config, state=state, round_index=1)
-    # With ¥1000, salary_paid ≤ 1000, so effective_eng ≤ 1000/(8000×3) = 0
     assert result["report"]["products_produced"] == 0
-    assert result["report"]["salary_paid"] <= 1000
+    assert result["report"]["salary_paid"] == 6 * 8000 * 3
+    assert result["report"]["eng_effective"] == 6
 
 
 def test_cash_sensitive_material_shortage_reduces_production():
@@ -458,6 +458,36 @@ def test_interest_accrues_to_debt_without_reducing_cash():
     assert abs(report["debt_after"] - 103500) < 0.01
     assert abs(summary["total_assets"] - 500000) < 0.01
     assert report["cashflow_table"][-1][2] == "CNY 0.00"
+
+
+def test_engineer_hr_shortfall_auto_borrows_into_debt():
+    """Engineer salary shortfall should be borrowed instead of shrinking HR."""
+    config = _jr_config()
+    state = _state(config, cash=1000, engineers=6, engineer_salary=8000)
+    fv = _base_fv()
+
+    result = settle(fv=fv, config=config, state=state, round_index=1)
+    report = result["report"]
+
+    assert report["eng_effective"] == 6
+    assert report["salary_paid"] == 144000
+    assert report["debt_after"] > 0
+    assert any(row[0] == "Loan" and row[1] == "auto for HR cost" for row in report["cashflow_table"])
+
+
+def test_interest_uses_final_debt_after_auto_hr_borrowing():
+    """Interest should be computed from the end-of-phase1 debt including auto HR borrowing."""
+    config = _jr_config()
+    state = _state(config, cash=1000, debt=100000, engineers=6, engineer_salary=8000)
+    fv = _base_fv()
+
+    result = settle(fv=fv, config=config, state=state, round_index=1)
+    report = result["report"]
+
+    debt_before_interest = 100000 + (144000 - 1000)
+    expected_interest = debt_before_interest * float(config.get("bank_interest_rate", 0.0))
+    assert abs(report["interest_due"] - expected_interest) < 0.01
+    assert abs(report["debt_after"] - (debt_before_interest + expected_interest)) < 0.01
 
 
 def test_zero_agents_cannot_sell():
@@ -1155,7 +1185,7 @@ def test_parts_inventory_after_is_capped_by_affordable_storage_capacity():
     config = load_config("OBOS")
     config["has_workers_mechanism"] = True
     config["part_storage_price"] = 1000
-    state = _obos_state(config, cash=2_000_000, parts_inventory=0, parts_storage_units=0)
+    state = _obos_state(config, cash=8_000_000, parts_inventory=0, parts_storage_units=0)
     result = settle(
         fv={
             "bank_amount": 0,
